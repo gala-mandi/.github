@@ -1,0 +1,433 @@
+{
+  "tickets": [
+    {
+      "title": "[Setup] Project setup (server + web + admin)",
+      "body": "**Side:** All · **Phase:** M1 Setup & Auth · **Priority:** High · **Type:** Setup\n\n### Summary\nSet up the base structure of all repos so every developer works the same way. This is a multi-tenant system: every shop owner gets one account and one `tenant_id`.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS + TypeScript | API structure (modules, guards, services) |\n| Database | PostgreSQL + Drizzle ORM + drizzle-kit | Data, type-safe queries, migrations |\n| Backend config | @nestjs/config + Zod | Validated env variables |\n| API docs | @nestjs/swagger | Auto docs at `/docs` |\n| Security | helmet, CORS, @nestjs/throttler | Secure headers, allowed origins, rate limits |\n| Logging | nestjs-pino | Request and error logs |\n| Local dev | Docker Compose | Postgres (and later Redis) |\n| Frontend | Next.js (App Router) + TypeScript | web and admin apps |\n| UI | Tailwind CSS + shadcn/ui | Components, theming, RTL later |\n| Server state | TanStack Query | API data, caching |\n| HTTP | Axios | Base instance + interceptors |\n| Client state | Zustand | UI and session state |\n| Forms | React Hook Form + Zod | Validation |\n| Code quality | ESLint + Prettier + Husky + lint-staged | Same style, checks before each commit |\n| Testing | Jest + supertest (server), Vitest + RTL, Playwright (frontend) | All test types |\n\n### Tasks\n- [ ] **server:** NestJS project, folder structure (`modules/`, `common/`, `database/`, `config/`)\n- [ ] **server:** Docker Compose with Postgres, `.env.example`\n- [ ] **server:** Drizzle setup, global `DatabaseModule`, first migration\n- [ ] **server:** base tables `tenants` and `users` with `tenant_id`, timestamps, `deleted_at`\n- [ ] **server:** Swagger, helmet, CORS, throttler, pino, global validation pipe, global exception filter\n- [ ] **server:** health check endpoint `GET /health`\n- [ ] **web + admin:** Next.js setup with Tailwind, shadcn/ui, TanStack Query provider, Axios instance, Zustand store\n- [ ] **all repos:** ESLint, Prettier, Husky, lint-staged, README with setup steps\n- [ ] **all repos:** GitHub Actions CI: lint + type-check + test on every PR\n\n### Scenarios\n- A new developer can clone, run `docker compose up` and `npm run dev`, and everything starts.\n- A missing or wrong env variable makes the app fail at startup with a clear message.\n- The API rejects requests from origins that aren't allowed (CORS).\n- Too many requests return `429`.\n- An unknown route returns a clean JSON `404`, not a stack trace.\n\n### Testing\n- **Unit:** config validation, exception filter\n- **Integration:** DB connection, migrations run on an empty DB\n- **E2E:** `GET /health` returns `200`\n- **CI:** pipeline fails if lint, types, or tests fail\n\n### Done when\n- All three repos run locally from the README alone.\n- CI is green on the main branch.\n- Swagger opens at `/docs`.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "All",
+        "Phase": "M1 Setup & Auth",
+        "Priority": "High",
+        "Type": "Setup"
+      }
+    },
+    {
+      "title": "[Auth] Authentication & multi-tenant access",
+      "body": "**Side:** All · **Phase:** M1 Setup & Auth · **Priority:** High · **Type:** Feature\n\n### Summary\nLogin for the super-admin (platform) and for shop users (owner, manager, operator). Every token carries `tenantId` and `role`, so every request is automatically limited to that shop's data.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Tokens | @nestjs/jwt + @nestjs/passport + passport-jwt | Access token (15 min) + refresh token (7 days) |\n| Passwords | argon2 | Password hashing |\n| Validation | Zod (nestjs-zod) | Login and signup body validation |\n| Roles | Guards + `@Roles()` decorator | `super_admin`, `owner`, `manager`, `operator` |\n| Tenant scope | `@CurrentTenant()` decorator + tenant guard | Injects `tenantId` from the token into every query |\n| Rate limit | @nestjs/throttler | Brute-force protection on login |\n| Frontend | Axios interceptor | Attach token, auto-refresh on `401`, retry the request |\n| Frontend | Next.js middleware | Protect routes, redirect to `/login` |\n| Frontend | Zustand | Logged-in user, role, tenant info |\n| Frontend | React Hook Form + Zod + shadcn Form | Login form |\n\n### Database\n- `users`: id, tenant_id (null for super_admin), name, phone (unique), email, password_hash, role, is_active, last_login_at\n- `refresh_tokens`: id, user_id, token_hash, device info, expires_at, revoked_at\n- `auth_logs`: user_id, tenant_id, action (login, logout, failed, refresh), ip, created_at\n\n### API endpoints\n- `POST /auth/login` (phone or email + password)\n- `POST /auth/refresh`\n- `POST /auth/logout` and `POST /auth/logout-all`\n- `GET /auth/me`\n- `POST /auth/change-password`\n- `POST /auth/forgot-password` and `POST /auth/reset-password` (OTP)\n\n### Token storage\n- **Access token:** in memory (Zustand), not localStorage\n- **Refresh token:** `httpOnly`, `secure`, `sameSite` cookie\n- **Refresh rotation:** each refresh issues a new token and revokes the old one. Reusing an old token logs out all sessions.\n\n### Tasks\n- [ ] **server:** users, refresh_tokens, auth_logs tables + migration\n- [ ] **server:** login, refresh, logout, me, change-password, forgot/reset password\n- [ ] **server:** JWT strategy, `RolesGuard`, `TenantGuard`, `@CurrentUser()`, `@CurrentTenant()`\n- [ ] **server:** throttle login (5 attempts per minute per IP + phone)\n- [ ] **server:** block login for suspended tenants and inactive users\n- [ ] **server:** seed one super-admin and one demo tenant with an owner\n- [ ] **web + admin:** login page, Axios interceptor with refresh queue, middleware route protection\n- [ ] **web + admin:** logout, \"session expired\" handling, role-based menu\n- [ ] **admin:** only `super_admin` can log in to the admin panel\n\n### Scenarios\n**Login**\n- Super-admin logs in → token has no tenantId, can open the admin panel\n- Shop owner logs in → token has their tenantId and role `owner`\n- Manager/operator logs in → limited menu based on role\n- Wrong password → `401`, generic message \"Invalid credentials\" (don't reveal whether the phone exists)\n- Unknown phone/email → same generic `401`\n- Inactive user → `403` \"Account disabled\"\n- Suspended tenant → `403` \"Shop suspended, contact support\"\n- 6th failed attempt within a minute → `429`\n- Empty, invalid, or very long fields → `400` with field errors\n\n**Tokens and sessions**\n- Access token expires → frontend refreshes silently, and the user notices nothing\n- Several API calls fail with `401` at the same time → only **one** refresh request is sent, the rest wait and retry\n- Refresh token expired or revoked → redirect to login with \"Session expired\"\n- Old refresh token reused → all sessions of that user revoked\n- Logout → refresh token revoked, cookie cleared\n- Logout all devices → every session ends\n- Login on two devices → both work independently\n\n**Multi-tenant and roles**\n- Shop A user requests shop B data by changing an ID → `404` (never shows B's data)\n- Tampered JWT (changed tenantId or role) → `401`\n- Operator calls an owner-only endpoint → `403`\n- Shop user opens the admin panel → redirected or `403`\n- Super-admin can view any tenant, but every action is logged\n\n**Password**\n- Change password with the wrong current password → `400`\n- After a password change or reset → all other sessions revoked\n- Reset OTP expired or used twice → rejected\n\n### Testing\n- **Unit:** password hashing/verify, token creation, guards, decorators\n- **Integration:** login flow with a real test DB, refresh rotation, revocation\n- **API E2E (supertest):** every scenario above\n- **Security:** brute force (throttle), JWT tampering, expired token, wrong signature, `alg: none`, SQL injection in login fields, no password hashes in any response\n- **Multi-tenant isolation:** an automated test that creates two tenants and checks shop A can't read or write shop B data\n- **Frontend unit/component (Vitest + RTL):** login form validation, error messages\n- **Frontend E2E (Playwright):** login → dashboard, token expiry → silent refresh, logout, protected route redirect\n- **Manual:** mobile view of the login page, slow network, double-clicking the login button\n\n### Done when\n- All scenarios above pass in automated tests.\n- No tenant can access another tenant's data.\n- Tokens refresh without the user noticing.\n- Every login, logout, and failed attempt appears in `auth_logs`.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "All",
+        "Phase": "M1 Setup & Auth",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Tenants & multi-tenant data isolation",
+      "body": "**Side:** Backend · **Phase:** M1 Setup & Auth · **Priority:** High · **Type:** Feature\n\n### Summary\nMake tenant isolation automatic so no developer can accidentally leak one shop's data to another. Every business table carries `tenant_id`, and every query is scoped by it without the developer having to remember.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| ORM | Drizzle ORM | Shared `tenantScoped()` query helper and base columns |\n| Request context | nestjs-cls (AsyncLocalStorage) | Holds the current `tenantId` for the whole request |\n| Database | PostgreSQL Row-Level Security (RLS) | Second safety layer: the DB itself blocks cross-tenant rows |\n| Guards | `TenantGuard` + `@CurrentTenant()` | Reads `tenantId` from the JWT, rejects requests without it |\n| Testing | Jest + supertest + test DB | Automated isolation tests |\n\n### Database\n- `tenants`: id, name, slug, owner_name, phone, email, address, city, logo_url, status (active / suspended / trial), plan, created_at, deleted_at\n- Base columns for every business table: `id`, `tenant_id` (FK, NOT NULL), `created_at`, `updated_at`, `created_by`, `deleted_at`\n- Composite indexes starting with `tenant_id` (e.g. `(tenant_id, created_at)`)\n- Unique constraints are per tenant, e.g. `UNIQUE (tenant_id, phone)` on traders\n- RLS policy: `tenant_id = current_setting('app.tenant_id')::uuid`, set at the start of each request transaction\n\n### Tasks\n- [ ] Create `tenants` table and base column helper for Drizzle schemas\n- [ ] Request context: put `tenantId`, `userId`, `role` in CLS after JWT validation\n- [ ] Repository/query helper that always adds `WHERE tenant_id = :tenantId` and sets `tenant_id` on insert\n- [ ] Enable RLS on business tables and set `app.tenant_id` per request transaction\n- [ ] Super-admin bypass: explicit `withTenant(tenantId)` call, always written to the audit log\n- [ ] Reject any request body that tries to send its own `tenant_id` (ignored or `400`)\n- [ ] Lint rule or code-review checklist: no raw queries on business tables without the helper\n- [ ] Document the pattern in the server README\n\n### Scenarios\n**Normal use**\n- Owner of shop A lists traders → only shop A traders returned\n- Creating a record → `tenant_id` set from the token, never from the request body\n- Same trader name or phone in shop A and shop B → both allowed\n\n**Attacks and mistakes**\n- Shop A user opens `/traders/<id of shop B trader>` → `404`\n- Shop A user updates or deletes a shop B record by ID → `404`, nothing changes\n- Request body contains `tenant_id` of another shop → ignored, record saved under the user's own tenant\n- Developer forgets the helper in a raw query → RLS still returns zero rows from other tenants\n- Token without `tenantId` calls a shop endpoint → `403`\n\n**Tenant status**\n- Suspended tenant → all shop endpoints return `403`, data stays safe\n- Soft-deleted tenant → users can't log in, data kept for recovery\n\n### Testing\n- **Unit:** query helper adds tenant filter, insert sets tenant_id\n- **Integration:** RLS policies block cross-tenant reads/writes on a real Postgres\n- **API E2E:** two seeded tenants; every CRUD endpoint tested for cross-tenant read, update, delete\n- **Security:** ID guessing, body tampering, missing tenant in token\n- **Performance:** list queries use the `(tenant_id, …)` index (check with `EXPLAIN`)\n\n### Done when\n- Every business table has `tenant_id` + RLS enabled.\n- Automated isolation test suite runs in CI and passes.\n- Pattern documented so new modules follow it by default.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M1 Setup & Auth",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Roles & permissions (RBAC) per tenant",
+      "body": "**Side:** Backend · **Phase:** M1 Setup & Auth · **Priority:** High · **Type:** Feature\n\n### Summary\nControl what each user can do. Platform level: `super_admin`. Inside each shop: `owner`, `manager`, `operator`. Permissions are checked on the server; the frontend only hides buttons.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Guards | NestJS `RolesGuard` + `PermissionsGuard` | Check role/permission on each endpoint |\n| Decorators | `@Roles()`, `@Permissions()` | Declare access on controllers |\n| Frontend | Zustand + a `can()` helper | Hide menu items and buttons the user can't use |\n\n### Default permission matrix\n- **super_admin:** manage tenants, plans, platform reports; no daily shop entries\n- **owner:** everything inside own shop, including staff, settings, delete, reports\n- **manager:** traders, rates, purchases, sales, payments, reports; no staff or settings\n- **operator:** create purchases, sales, payments, view rates; no edit after the day closes, no delete, no reports\n\n### Tasks\n- [ ] Define roles and permission constants in one shared file\n- [ ] `RolesGuard` / `PermissionsGuard`, applied globally with `@Public()` for open routes\n- [ ] Return the user's permissions from `GET /auth/me`\n- [ ] Frontend `can('purchase.delete')` helper for menu and buttons\n- [ ] Owner can't remove their own owner role (at least one owner per shop)\n\n### Scenarios\n- Operator tries to delete a purchase → `403`\n- Manager opens staff management → `403` on API, menu item hidden\n- Owner changes a manager to operator → new permissions apply on the next token refresh\n- Last owner tries to downgrade themselves → `400`\n- Super-admin calls a shop-only endpoint without choosing a tenant → `403`\n- Hidden button bypassed with a direct API call → server still returns `403`\n\n### Testing\n- **Unit:** guards with each role, permission matrix\n- **API E2E:** one test per role per protected endpoint group\n- **Frontend component:** menu and buttons render per role\n- **Security:** role tampering in token, direct API calls\n\n### Done when\n- Every endpoint has an explicit role/permission or `@Public()`.\n- Role tests run in CI.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M1 Setup & Auth",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Audit log & soft delete",
+      "body": "**Side:** Backend · **Phase:** M1 Setup & Auth · **Priority:** Medium · **Type:** Feature\n\n### Summary\nRecord who changed what and when, and never hard-delete business data. Mandi disputes happen; the audit log is the proof.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Interceptor | NestJS interceptor | Captures create/update/delete actions automatically |\n| Database | `audit_logs` table (JSONB) | Stores before/after values |\n| ORM | Drizzle | `deleted_at` filter on all reads |\n\n### Database\n- `audit_logs`: id, tenant_id, user_id, entity, entity_id, action (create/update/delete/restore), before (jsonb), after (jsonb), ip, user_agent, created_at\n- All business tables: `deleted_at` (nullable)\n\n### Tasks\n- [ ] Audit interceptor/service called from all write operations\n- [ ] Soft delete in the query helper; default reads exclude deleted rows\n- [ ] Restore endpoint for owners\n- [ ] Audit log list API with filters (user, entity, date) for owner and super-admin\n- [ ] Never log passwords, tokens, or OTPs\n\n### Scenarios\n- Operator edits a purchase weight → log shows old and new weight, user, time\n- Owner deletes a trader → trader hidden, still in DB, restorable\n- Deleted trader's old purchases still show the trader name in reports\n- Shop A owner can't see shop B audit logs\n- Login with a password → password never appears in any log\n\n### Testing\n- **Unit:** diff builder, sensitive field masking\n- **Integration:** write → audit row created in the same transaction\n- **API E2E:** soft delete, restore, audit filters, tenant isolation\n\n### Done when\n- Every write on business tables produces an audit row.\n- No hard deletes in business modules.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M1 Setup & Auth",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Admin] Super-admin panel layout & navigation",
+      "body": "**Side:** Admin · **Phase:** M1 Setup & Auth · **Priority:** High · **Type:** Feature\n\n### Summary\nBase layout for the platform owner's admin panel: sidebar, header, protected routes, and pages that later screens plug into.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Framework | Next.js App Router | Route groups `(auth)` and `(dashboard)` |\n| UI | shadcn/ui (Sidebar, Sheet, DropdownMenu, Breadcrumb) | Layout components |\n| State | Zustand | Sidebar open/closed, theme |\n| Icons | lucide-react | Menu icons |\n| Toasts | sonner | Success and error messages |\n\n### Tasks\n- [ ] Dashboard layout: collapsible sidebar, header with user menu and logout\n- [ ] Menu: Dashboard, Shops (tenants), Plans, Users, Audit logs, Settings\n- [ ] Breadcrumbs and page header component\n- [ ] Light/dark theme toggle\n- [ ] Global error boundary, 404 and 403 pages, loading skeletons\n- [ ] Responsive: sidebar becomes a drawer on mobile\n\n### Scenarios\n- Super-admin logs in → lands on the dashboard\n- Shop user tries to open the admin URL → redirected to login with an error\n- Refreshing any page keeps the user logged in\n- Mobile width → menu opens as a drawer\n- Unknown URL → 404 page inside the layout\n\n### Testing\n- **Component:** sidebar, header, theme toggle\n- **E2E (Playwright):** login → navigate every menu item → logout\n- **Manual:** desktop, tablet, mobile widths; light and dark\n\n### Done when\n- All menu routes exist (placeholder pages are fine) and are protected.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Admin",
+        "Phase": "M1 Setup & Auth",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Shop panel layout, navigation & role-based menu",
+      "body": "**Side:** Web · **Phase:** M1 Setup & Auth · **Priority:** High · **Type:** Feature\n\n### Summary\nBase layout for the shop owner/staff panel used every day in the mandi. Shows the shop name and logo, and a menu based on the user's role.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Framework | Next.js App Router | Route groups and layouts |\n| UI | shadcn/ui | Sidebar, header, command palette |\n| Search | shadcn Command (cmdk) | Ctrl+K quick search for traders and pages |\n| State | Zustand | Current user, shop info, sidebar state |\n| Permissions | `can()` helper | Role-based menu |\n\n### Tasks\n- [ ] Layout with shop name/logo in the header (from tenant settings)\n- [ ] Menu: Dashboard, Rates, Purchases, Sales, Traders, Commodities, Ledger, Payments, Reports, Staff, Settings\n- [ ] Hide menu items by role (operator sees fewer items)\n- [ ] Ctrl+K command palette\n- [ ] Keyboard-friendly navigation for data-entry operators\n- [ ] 403, 404, error, and loading states\n\n### Scenarios\n- Owner sees every menu item; operator sees only Rates, Purchases, Sales, Payments\n- Operator opens `/settings` directly → 403 page\n- Shop logo/name changes in settings → header updates without logout\n- Suspended shop → all pages show a \"Shop suspended\" screen\n- Mobile width → drawer menu\n\n### Testing\n- **Component:** menu per role\n- **E2E (Playwright):** login as owner and operator, compare visible menu, try a blocked URL\n- **Manual:** keyboard-only navigation, mobile view\n\n### Done when\n- Layout works for all roles; blocked routes show 403.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M1 Setup & Auth",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Admin] Shop (tenant) management: create, suspend, activate",
+      "body": "**Side:** Admin · **Phase:** M2 Masters · **Priority:** High · **Type:** Feature\n\n### Summary\nSuper-admin creates a new shop, which creates the tenant and its owner account in one step, and can suspend or reactivate any shop.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS `TenantsModule` (super_admin only) | Tenant CRUD + status changes |\n| Transactions | Drizzle transaction | Tenant + owner user + default settings created together |\n| Table | TanStack Table + shared DataTable | Shops list with search, filter, pagination |\n| Forms | React Hook Form + Zod | Create/edit shop form |\n| URL state | nuqs | Search and filters kept in the URL |\n\n### API endpoints\n- `GET /admin/tenants` (search, status filter, pagination)\n- `POST /admin/tenants` (shop + owner details)\n- `GET /admin/tenants/:id`, `PATCH /admin/tenants/:id`\n- `POST /admin/tenants/:id/suspend`, `POST /admin/tenants/:id/activate`\n\n### Tasks\n- [ ] **server:** endpoints above, all `super_admin` only, all audited\n- [ ] **server:** create tenant + owner + default settings in one transaction\n- [ ] **server:** suspending a shop revokes all its users' refresh tokens\n- [ ] **admin:** shops list page, create/edit form, shop detail page, suspend/activate with confirmation\n- [ ] **admin:** show owner's temporary password once, or send an invite link\n\n### Scenarios\n- Create shop with valid data → tenant, owner, and settings created; owner can log in\n- Owner phone already used → `409`, nothing created (transaction rolled back)\n- Suspend shop → its users are logged out within one token lifetime and can't log back in\n- Activate shop → users can log in again\n- Search by shop name, owner, phone, city\n- Non-super-admin calls these endpoints → `403`\n\n### Testing\n- **Unit:** create-tenant service rollback\n- **API E2E:** create, duplicate phone, suspend, activate, role checks\n- **Frontend E2E:** create shop → log in as the new owner\n\n### Done when\n- Super-admin can onboard a shop end to end without touching the database.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Admin",
+        "Phase": "M2 Masters",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Shop onboarding & staff invitations",
+      "body": "**Side:** Backend · **Phase:** M2 Masters · **Priority:** Medium · **Type:** Feature\n\n### Summary\nShop owners add their staff (managers, operators). Staff join through an invite link or a temporary password, always inside the owner's tenant.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Tokens | Signed one-time invite token (hashed in DB) | Secure invite links |\n| Messaging | SMS / WhatsApp provider (to be chosen) | Send invite link or OTP |\n| Queue (later) | BullMQ | Send messages in the background |\n\n### Database\n- `invitations`: id, tenant_id, phone, role, token_hash, expires_at, accepted_at, invited_by\n\n### API endpoints\n- `POST /staff/invitations`, `GET /staff/invitations`, `DELETE /staff/invitations/:id`\n- `POST /auth/accept-invite` (token + name + password)\n\n### Tasks\n- [ ] Invite, list, cancel invitations (owner only)\n- [ ] Accept invite: create user in the inviting tenant with the invited role\n- [ ] Invite expires after 48 hours, single use\n- [ ] Optional: owner sets a temporary password instead; user must change it on first login\n\n### Scenarios\n- Owner invites an operator → operator accepts → can log in to that shop only\n- Invite link used twice → second use rejected\n- Expired invite → rejected with a clear message\n- Phone already registered in another shop → `409` (one user belongs to one shop)\n- Manager tries to invite → `403`\n- Cancelled invite → link stops working\n\n### Testing\n- **Unit:** token creation/verification, expiry\n- **API E2E:** full invite flow, reuse, expiry, role checks, tenant isolation\n- **Security:** token guessing, tampered role in the accept request\n\n### Done when\n- Owner can add staff without super-admin help.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M2 Masters",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Staff management (users & roles)",
+      "body": "**Side:** Web · **Phase:** M2 Masters · **Priority:** Medium · **Type:** Feature\n\n### Summary\nOwner screen to see, invite, change role, deactivate, and reactivate staff of their shop.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Table | Shared DataTable | Staff list |\n| Forms | React Hook Form + Zod | Invite and edit forms |\n| Data | TanStack Query mutations | Invite, role change, deactivate |\n\n### Tasks\n- [ ] Staff list: name, phone, role, status, last login\n- [ ] Invite staff dialog; pending invitations tab with cancel/resend\n- [ ] Change role, deactivate/reactivate with confirmation\n- [ ] Owner can't deactivate themselves\n\n### Scenarios\n- Owner deactivates an operator → operator is logged out and can't log in\n- Owner changes manager → operator → reduced menu after next refresh\n- Manager opens Staff page → 403\n- Validation errors shown under each field\n\n### Testing\n- **Component:** forms and validation\n- **E2E (Playwright):** invite → accept → deactivate\n\n### Done when\n- Owner can fully manage staff from the panel.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M2 Masters",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[All] Shop settings (profile, parchi header, commission, units)",
+      "body": "**Side:** All · **Phase:** M2 Masters · **Priority:** Medium · **Type:** Feature\n\n### Summary\nEach shop configures its own details used across the app: name, logo, address on the parchi, default commission and charges, units, and bill number prefix.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | `tenant_settings` table | One row per tenant |\n| Uploads | S3-compatible storage (e.g. Cloudflare R2) + react-dropzone | Shop logo upload |\n| Forms | React Hook Form + Zod | Settings form with sections |\n\n### Database\n- `tenant_settings`: tenant_id, display_name, logo_url, address, phones, parchi_footer, default_commission_pct, market_fee_pct, labour_per_bag, default_unit (kg/maund), maund_kg (default 40), bill_prefix, financial_year_start, language\n\n### API endpoints\n- `GET /settings`, `PATCH /settings` (owner only)\n- `POST /settings/logo` (image upload)\n\n### Tasks\n- [ ] **server:** settings table, defaults created with the tenant, get/update endpoints\n- [ ] **server:** logo upload with type/size validation (png/jpg, ≤ 1 MB)\n- [ ] **web:** settings page with sections: Shop profile, Parchi, Charges & commission, Units, Numbering\n- [ ] **web:** live parchi header preview\n\n### Scenarios\n- Owner changes commission % → new purchases use it; old ones keep their saved value\n- Owner uploads a 5 MB file or a PDF as logo → rejected with a clear message\n- Manager or operator opens settings → 403\n- Maund set to 40 kg → weight conversions everywhere use 40\n\n### Testing\n- **Unit:** settings validation, defaults\n- **API E2E:** update, upload, role checks, tenant isolation\n- **E2E:** change settings → see them on a new parchi\n\n### Done when\n- Settings saved per shop and used by purchases, sales, and printing.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "All",
+        "Phase": "M2 Masters",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Reusable DataTable component (web + admin)",
+      "body": "**Side:** Web · **Phase:** M2 Masters · **Priority:** High · **Type:** Feature\n\n### Summary\nOne table component used by every list screen: server-side pagination, sorting, search, filters, column visibility, and export.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Table | TanStack Table | Headless table logic |\n| UI | shadcn/ui Table, DropdownMenu, Popover | Look and feel |\n| URL state | nuqs | Page, sort, filters in the URL so links are shareable |\n| Data | TanStack Query (`keepPreviousData`) | Smooth paging |\n| Export | SheetJS (xlsx) | Export current view to Excel |\n| Large lists | TanStack Virtual (optional) | Very long tables |\n\n### Tasks\n- [ ] Server-side pagination, sorting, global search with debounce\n- [ ] Filter bar: date range, select, status\n- [ ] Column visibility toggle, remembered per user (localStorage)\n- [ ] Row actions menu, bulk select\n- [ ] Empty, loading (skeleton), and error states\n- [ ] Export to Excel button\n- [ ] Shared API contract: `?page=&limit=&sort=&q=&filters` → `{ data, meta: { total, page, limit } }`\n\n### Scenarios\n- Change page, sort, or filter → URL updates; refresh keeps the same view\n- Search typing → only one request after typing stops\n- No results → friendly empty state\n- API error → error state with retry button\n- 10,000 rows on the server → table stays fast (paged)\n\n### Testing\n- **Component (Vitest + RTL):** sorting, paging, filters, empty/error states\n- **E2E:** filters persist after refresh\n- **Performance:** large dataset paging\n\n### Done when\n- Traders list uses it as the first real consumer.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M2 Masters",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Traders module (kissan, beopari, arhti)",
+      "body": "**Side:** Backend · **Phase:** M2 Masters · **Priority:** High · **Type:** Feature\n\n### Summary\nManage everyone the shop deals with: farmers (kissan) who sell, buyers (beopari) who buy, and other commission agents (arhti). Each trader belongs to one shop.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS `TradersModule` + Drizzle | CRUD with tenant scope |\n| Validation | Zod (shared schema) | Same rules on web and server |\n| Search | Postgres `ILIKE` + trigram index (pg_trgm) | Fast name/phone search |\n\n### Database\n- `traders`: id, tenant_id, type (kissan/beopari/arhti), name, father_name, phone, cnic (optional), village/city, address, opening_balance, opening_balance_type (debit/credit), credit_limit, is_active, notes, timestamps, deleted_at — `UNIQUE (tenant_id, phone)`\n\n### API endpoints\n- `GET /traders` (type, search, active, pagination)\n- `POST /traders`, `GET /traders/:id`, `PATCH /traders/:id`, `DELETE /traders/:id` (soft)\n- `GET /traders/lookup?q=` (fast search for forms)\n\n### Tasks\n- [ ] Schema, migration, indexes (`tenant_id, type`, trigram on name)\n- [ ] CRUD endpoints with permissions (operator: create/view; manager+: edit; owner: delete)\n- [ ] Opening balance creates the first ledger entry\n- [ ] Block delete when the trader has transactions (deactivate instead)\n\n### Scenarios\n- Create kissan with name and phone → saved under the user's shop\n- Same phone twice in one shop → `409`; same phone in another shop → allowed\n- Search \"ali\" → matches names and phones in this shop only\n- Delete trader with purchases → `409`, suggest deactivate\n- Opening balance 50,000 credit → shows in the trader's ledger\n- Invalid phone/CNIC format → `400`\n\n### Testing\n- **Unit:** validation schema\n- **API E2E:** CRUD, duplicates, search, delete rules, permissions\n- **Multi-tenant:** cross-tenant read/update/delete blocked\n- **Performance:** lookup under 100 ms with 10k traders\n\n### Done when\n- Traders usable in purchase and sale forms through `/traders/lookup`.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M2 Masters",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Traders pages",
+      "body": "**Side:** Web · **Phase:** M2 Masters · **Priority:** High · **Type:** Feature\n\n### Summary\nList, add, edit, and view traders, with tabs per type and a trader profile showing balance and recent transactions.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Table | Shared DataTable | Traders list |\n| Forms | React Hook Form + Zod + shadcn Form | Add/edit trader |\n| UI | shadcn Tabs, Sheet, Badge | Type tabs, quick add drawer |\n\n### Tasks\n- [ ] List with tabs: All / Kissan / Beopari / Arhti; filters and search\n- [ ] Add/edit in a side sheet for fast entry\n- [ ] Trader profile: details, current balance, recent purchases/sales/payments\n- [ ] Reusable `TraderCombobox` for other forms (search as you type, quick add)\n\n### Scenarios\n- Operator adds a trader from inside the purchase form without leaving it\n- Duplicate phone → error shown under the phone field\n- Deactivated trader hidden from combobox but visible in reports\n- Urdu names display correctly\n\n### Testing\n- **Component:** form validation, combobox search\n- **E2E:** add → edit → search → open profile\n\n### Done when\n- Traders fully manageable; combobox ready for purchase/sale forms.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M2 Masters",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Commodities & units (kg / maund)",
+      "body": "**Side:** Backend · **Phase:** M2 Masters · **Priority:** High · **Type:** Feature\n\n### Summary\nItems traded in the mandi (gandum, kapas, chawal, sabzi, etc.) with their default unit, bag weight, and charges. Weights stored in kg, shown in maund where needed.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS `CommoditiesModule` + Drizzle | Tenant-scoped CRUD |\n| Numbers | Postgres `numeric` + decimal.js | Exact weight and money maths, no float errors |\n\n### Database\n- `commodities`: id, tenant_id, name, name_ur, category, default_unit (kg/maund/bag), bag_weight_kg, is_active — `UNIQUE (tenant_id, name)`\n- Optional `commodity_charges`: commodity-specific commission/market fee/labour overrides\n\n### API endpoints\n- `GET/POST /commodities`, `PATCH/DELETE /commodities/:id`\n- `GET /commodities/lookup`\n\n### Tasks\n- [ ] Schema, CRUD, permissions\n- [ ] Seed a default commodity list for new shops (optional, editable)\n- [ ] Shared unit conversion helper: kg ↔ maund (uses shop's `maund_kg`) ↔ bags\n- [ ] Block delete when used in transactions\n\n### Scenarios\n- 1,000 kg with maund = 40 kg → shows 25 maund\n- 1,010 kg → 25 maund 10 kg (display format)\n- Duplicate commodity name in same shop → `409`\n- Commodity-specific commission overrides the shop default\n\n### Testing\n- **Unit:** conversion helper with edge cases (0, decimals, very large)\n- **API E2E:** CRUD, duplicates, delete rules, tenant isolation\n\n### Done when\n- Commodities and unit conversion ready for rates, purchases, and sales.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M2 Masters",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Commodities pages",
+      "body": "**Side:** Web · **Phase:** M2 Masters · **Priority:** Medium · **Type:** Feature\n\n### Summary\nManage the shop's commodity list with English and Urdu names, units, and optional charge overrides.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Table | Shared DataTable | Commodity list |\n| Forms | React Hook Form + Zod | Add/edit |\n\n### Tasks\n- [ ] List, add, edit, deactivate\n- [ ] Charges override section (commission, market fee, labour)\n- [ ] `CommodityCombobox` for other forms\n\n### Scenarios\n- Add \"Gandum / گندم\" with 100 kg bag → available in rates and purchase forms\n- Deactivated commodity hidden from new entries, kept in history\n\n### Testing\n- **Component:** form validation\n- **E2E:** add → use in purchase form\n\n### Done when\n- Commodities manageable and selectable in forms.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M2 Masters",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Daily rates API",
+      "body": "**Side:** Backend · **Phase:** M3 Daily Rates · **Priority:** High · **Type:** Feature\n\n### Summary\nRecord each day's buying/selling rate per commodity for the shop, keep full history, and provide the current rate to purchase/sale forms.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS `RatesModule` + Drizzle | Rates CRUD and history |\n| Dates | date-fns + `Asia/Karachi` timezone | Correct \"today\" for Pakistan |\n| Cache (later) | Redis | Today's rates cached per tenant |\n\n### Database\n- `daily_rates`: id, tenant_id, commodity_id, rate_date, min_rate, max_rate, avg_rate, unit (per maund/kg), created_by — `UNIQUE (tenant_id, commodity_id, rate_date)`\n\n### API endpoints\n- `GET /rates/today`\n- `GET /rates?commodity=&from=&to=` (history)\n- `PUT /rates/:date` (bulk upsert for many commodities at once)\n\n### Tasks\n- [ ] Schema, unique constraint, bulk upsert\n- [ ] \"Today\" calculated in Asia/Karachi time\n- [ ] Copy yesterday's rates as a starting point\n- [ ] Editing past dates allowed for owner/manager only, audited\n\n### Scenarios\n- Enter rates for 10 commodities in one save\n- Save again for the same day → updates, no duplicates\n- At 00:30 Pakistan time, \"today\" is the new date (not UTC)\n- min > max → `400`\n- Operator edits yesterday's rate → `403`\n- Shop A rates never visible to shop B\n\n### Testing\n- **Unit:** date/timezone helper, validation\n- **API E2E:** bulk upsert, history filters, permissions, tenant isolation\n\n### Done when\n- Purchase and sale forms can pre-fill from today's rate.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M3 Daily Rates",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Daily rates entry & trend chart",
+      "body": "**Side:** Web · **Phase:** M3 Daily Rates · **Priority:** High · **Type:** Feature\n\n### Summary\nA fast grid to enter today's rates for all commodities, plus a chart showing how each commodity's rate moved over time.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Grid | TanStack Table (editable cells) | Spreadsheet-like entry |\n| Charts | Recharts | Rate trend line with min–max band |\n| Forms | React Hook Form `useFieldArray` | Many rows in one form |\n\n### Tasks\n- [ ] Rates grid: one row per commodity, min/max/avg inputs, Tab/Enter moves to the next cell\n- [ ] \"Copy yesterday\" button\n- [ ] Date picker to view/edit past days (role-based)\n- [ ] Trend chart per commodity: 7 / 30 / 90 days\n\n### Scenarios\n- Operator enters all rates using only the keyboard\n- Unsaved changes → warning before leaving the page\n- Chart with missing days shows gaps, not zero\n\n### Testing\n- **Component:** grid keyboard navigation, validation\n- **E2E:** enter rates → reload → values kept\n\n### Done when\n- Daily rates entered in under a minute for a typical shop.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M3 Daily Rates",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Commission & charges calculation",
+      "body": "**Side:** Backend · **Phase:** M4 Purchases & Sales · **Priority:** High · **Type:** Feature\n\n### Summary\nOne shared calculator for gross amount, commission, market fee, labour, and other deductions, used by purchases, sales, previews, and reports so totals always match.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Shared package | TypeScript module used by server and web | Same calculation everywhere |\n| Numbers | decimal.js | Exact decimal maths |\n\n### Money and weight rules\n- Money stored as `numeric(14,2)`; weights as `numeric(12,3)` in kg\n- All maths with decimal.js on the frontend and in services, never JS floats\n- Rates, commission %, and charges are **copied onto the record** when saved, so later setting changes don't alter history\n\n### Tasks\n- [ ] `calculateTransaction({ weightKg, rate, rateUnit, bags, charges })` → gross, each deduction, net\n- [ ] Charge sources in order: commodity override → shop default → manual override on the entry\n- [ ] Rounding rule agreed with the client (e.g. to nearest rupee) and applied once at the end\n- [ ] Return a line-by-line breakdown for the parchi\n\n### Scenarios\n- 1,000 kg at Rs 4,000 per maund (40 kg) → gross Rs 100,000\n- Commission 2% + market fee 0.5% + labour Rs 20/bag × 10 bags → correct net\n- Zero weight or negative rate → validation error\n- Commodity override present → override used instead of shop default\n- Same input on server and web → identical result\n\n### Testing\n- **Unit:** table-driven tests with real mandi examples from the client, rounding edge cases\n- **Contract:** server and web produce the same numbers for the same fixtures\n\n### Done when\n- Calculator covered by tests with client-verified examples.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M4 Purchases & Sales",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Purchases API (buying from kissan)",
+      "body": "**Side:** Backend · **Phase:** M4 Purchases & Sales · **Priority:** High · **Type:** Feature\n\n### Summary\nRecord goods bought from a farmer: commodity, bags, weight, rate, deductions, and net payable. Saving a purchase also writes the ledger entries in the same transaction.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS `PurchasesModule` + Drizzle transactions | Purchase + items + ledger in one atomic save |\n| Calculator | Shared commission & charges module | Totals |\n| Validation | Zod (shared) | Same rules on web and server |\n| Idempotency | `Idempotency-Key` header | No duplicates on double-click or retry |\n\n### Database\n- `purchases`: id, tenant_id, bill_no, trader_id, purchase_date, gross_amount, total_deductions, net_amount, paid_amount, status (draft/posted/cancelled), notes, created_by\n- `purchase_items`: id, tenant_id, purchase_id, commodity_id, bags, weight_kg, rate, rate_unit, amount\n- `purchase_charges`: id, tenant_id, purchase_id, type (commission/market_fee/labour/other), basis, value, amount\n\n### API endpoints\n- `POST /purchases` (with `Idempotency-Key`)\n- `GET /purchases` (date range, trader, commodity, status)\n- `GET /purchases/:id`, `PATCH /purchases/:id` (before day close), `POST /purchases/:id/cancel`\n\n### Money and weight rules\n- Money stored as `numeric(14,2)`; weights as `numeric(12,3)` in kg\n- All maths with decimal.js on the frontend and in services, never JS floats\n- Rates, commission %, and charges are **copied onto the record** when saved, so later setting changes don't alter history\n\n### Tasks\n- [ ] Schema and migrations\n- [ ] Create: validate → calculate → assign bill number → insert purchase, items, charges, ledger entries in one transaction\n- [ ] Edit allowed only before the day is closed (owner can always edit, audited); edit reverses and re-posts ledger entries\n- [ ] Cancel instead of delete: reversing ledger entries, bill number kept\n- [ ] Optional immediate payment on the same save\n\n### Scenarios\n- Save purchase → ledger shows the kissan credited with the net amount\n- Double-click Save → only one purchase created (idempotency)\n- DB error halfway → nothing saved (no purchase without ledger)\n- Edit weight after saving → totals and ledger corrected, audit shows old values\n- Cancel purchase → ledger reversed, bill marked cancelled, number not reused\n- Inactive trader or commodity → `400`\n- Operator edits after the day is closed → `403`\n- Shop A can't read or cancel shop B purchases\n\n### Testing\n- **Unit:** service totals, edit/cancel ledger reversal\n- **Integration:** transaction rollback on failure\n- **API E2E:** create, idempotency, edit, cancel, filters, permissions\n- **Multi-tenant:** cross-tenant access blocked\n- **Concurrency:** two operators saving at the same time get different bill numbers\n\n### Done when\n- Purchase totals always equal the ledger effect.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M4 Purchases & Sales",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Purchase entry form",
+      "body": "**Side:** Web · **Phase:** M4 Purchases & Sales · **Priority:** High · **Type:** Feature\n\n### Summary\nFast keyboard-friendly screen for operators to enter purchases during busy mandi hours, with a live total and a print button.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Forms | React Hook Form + Zod + `useFieldArray` | Multiple items per bill |\n| Inputs | TraderCombobox, CommodityCombobox | Search as you type |\n| Calculator | Shared commission & charges module | Live totals while typing |\n| Data | TanStack Query mutation + idempotency key | Safe save |\n| Feedback | sonner | Saved / error toasts |\n\n### Tasks\n- [ ] Header: date, trader (with quick add), notes\n- [ ] Items rows: commodity, bags, weight (kg or maund), rate (pre-filled from today's rate)\n- [ ] Live breakdown: gross, each deduction, net\n- [ ] Save, Save & Print, Save & New; keyboard shortcuts (Ctrl+S, Ctrl+P)\n- [ ] Purchases list page with filters, view, edit, cancel\n\n### Scenarios\n- Enter a full purchase with only the keyboard in under 30 seconds\n- Rate pre-fills from today's rate and can be changed\n- Weight typed in maund → converted correctly\n- Network drops during save → clear error, retry doesn't duplicate\n- Leaving with unsaved data → warning\n\n### Testing\n- **Component:** live totals, validation, unit switch\n- **E2E (Playwright):** create → print preview → appears in list and in the trader's ledger\n- **Manual:** speed test with a real operator\n\n### Done when\n- Operators can enter purchases faster than on paper.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M4 Purchases & Sales",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Sales API (selling to beopari)",
+      "body": "**Side:** Backend · **Phase:** M4 Purchases & Sales · **Priority:** High · **Type:** Feature\n\n### Summary\nRecord goods sold to buyers, with charges and receivable amount. Saving a sale writes the ledger entries in the same transaction.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS `SalesModule` + Drizzle transactions | Sale + items + ledger atomically |\n| Calculator | Shared commission & charges module | Totals |\n| Idempotency | `Idempotency-Key` header | No duplicates |\n\n### Database\n- `sales`, `sale_items`, `sale_charges`: same shape as purchases, with `buyer_id`, `received_amount`\n- Optional link `sale_items.purchase_item_id` when selling a specific farmer's lot (arhti flow)\n\n### API endpoints\n- `POST /sales`, `GET /sales`, `GET /sales/:id`, `PATCH /sales/:id`, `POST /sales/:id/cancel`\n\n### Money and weight rules\n- Money stored as `numeric(14,2)`; weights as `numeric(12,3)` in kg\n- All maths with decimal.js on the frontend and in services, never JS floats\n- Rates, commission %, and charges are **copied onto the record** when saved, so later setting changes don't alter history\n\n### Tasks\n- [ ] Same create/edit/cancel rules as purchases\n- [ ] Credit limit check: warn or block when the buyer exceeds `credit_limit` (setting)\n- [ ] Optional lot linking for commission-agent flow\n- [ ] Optional immediate receipt on the same save\n\n### Scenarios\n- Save sale → buyer debited with the receivable amount\n- Buyer over credit limit → warning (or block, by setting)\n- Cancel sale → ledger reversed\n- Double-click → one sale only\n- Shop A can't access shop B sales\n\n### Testing\n- **API E2E:** create, credit limit, edit, cancel, idempotency, permissions\n- **Multi-tenant:** isolation\n- **Concurrency:** parallel saves get unique bill numbers\n\n### Done when\n- Sales totals always equal the ledger effect.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M4 Purchases & Sales",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Sales entry form",
+      "body": "**Side:** Web · **Phase:** M4 Purchases & Sales · **Priority:** High · **Type:** Feature\n\n### Summary\nSame fast entry experience as purchases, for selling to buyers, with credit-limit warnings.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Forms | React Hook Form + Zod + `useFieldArray` | Items |\n| Inputs | TraderCombobox (beopari), CommodityCombobox | Search |\n| Calculator | Shared module | Live totals |\n\n### Tasks\n- [ ] Sale form, list page, view, edit, cancel\n- [ ] Show buyer's current balance and credit limit next to the name\n- [ ] Save & Print\n\n### Scenarios\n- Buyer near credit limit → visible warning before save\n- Keyboard-only entry\n- Sale appears in the buyer's ledger immediately\n\n### Testing\n- **Component:** totals, warnings\n- **E2E:** create → print → ledger check\n\n### Done when\n- Sales can be entered and printed quickly.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M4 Purchases & Sales",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Per-shop bill / parchi numbering",
+      "body": "**Side:** Backend · **Phase:** M4 Purchases & Sales · **Priority:** High · **Type:** Feature\n\n### Summary\nEach shop gets its own gap-free bill number series per document type and financial year, safe under concurrent saves.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Database | `number_sequences` table with row lock (`SELECT … FOR UPDATE`) | Safe concurrent numbering |\n\n### Database\n- `number_sequences`: tenant_id, doc_type (purchase/sale/payment/receipt), financial_year, prefix, next_number — PK (tenant_id, doc_type, financial_year)\n\n### Tasks\n- [ ] `nextNumber(tenantId, docType)` inside the document's transaction\n- [ ] Format: `{prefix}-{FY}-{000123}` using shop settings\n- [ ] New financial year starts from 1\n- [ ] Cancelled documents keep their number (no reuse)\n\n### Scenarios\n- Shop A and shop B both start at 1\n- 20 parallel purchase saves → 20 unique, consecutive numbers\n- Transaction rolls back → number not consumed\n- Financial year changes → series restarts\n\n### Testing\n- **Unit:** formatting\n- **Concurrency:** parallel inserts on a real Postgres\n- **Multi-tenant:** independent sequences\n\n### Done when\n- No duplicate or skipped bill numbers under load.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M4 Purchases & Sales",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Parchi / bill printing",
+      "body": "**Side:** Web · **Phase:** M4 Purchases & Sales · **Priority:** Medium · **Type:** Feature\n\n### Summary\nPrint purchase and sale parchis with the shop's header and logo, in English or Urdu, on A4/A5 and thermal printers.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Printing | react-to-print | Print a React component |\n| Fonts | Noto Nastaliq Urdu (Google Fonts) | Urdu text |\n| PDF (later) | Server-side PDF (e.g. Playwright/Puppeteer) | Share parchi on WhatsApp |\n\n### Tasks\n- [ ] Parchi template: shop header/logo, bill no, date, trader, items, charges breakdown, net, footer\n- [ ] Paper sizes: A4, A5, 80 mm thermal\n- [ ] English / Urdu toggle\n- [ ] Reprint from the list; cancelled bills print with a CANCELLED watermark\n\n### Scenarios\n- Print on 80 mm thermal → nothing cut off\n- Urdu parchi → right-to-left layout, numbers readable\n- Long trader name or many items → wraps cleanly, adds a page if needed\n\n### Testing\n- **Component:** snapshot of templates\n- **Manual:** real printers: A4 laser, 80 mm thermal\n\n### Done when\n- Client approves the printed parchi on their printer.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M4 Purchases & Sales",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Ledger (khata) entries & balances",
+      "body": "**Side:** Backend · **Phase:** M5 Ledger & Payments · **Priority:** High · **Type:** Feature\n\n### Summary\nDouble-entry style ledger for every trader. Balances are calculated from entries, never edited directly, so the khata can always be explained line by line.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Database | `ledger_entries` (append-only) | Single source of truth for balances |\n| Performance | Daily balance snapshots or a materialized view | Fast balances with many entries |\n\n### Database\n- `ledger_entries`: id, tenant_id, trader_id, entry_date, source_type (opening/purchase/sale/payment/receipt/adjustment/reversal), source_id, debit, credit, narration, created_by — index `(tenant_id, trader_id, entry_date)`\n\n### API endpoints\n- `GET /ledger/:traderId?from=&to=` (entries with opening and running balance)\n- `GET /ledger/balances` (all traders: receivable / payable)\n- `POST /ledger/adjustments` (owner only, reason required)\n\n### Money and weight rules\n- Money stored as `numeric(14,2)`; weights as `numeric(12,3)` in kg\n- All maths with decimal.js on the frontend and in services, never JS floats\n- Rates, commission %, and charges are **copied onto the record** when saved, so later setting changes don't alter history\n\n### Tasks\n- [ ] Ledger service used by purchases, sales, payments (never written directly by controllers)\n- [ ] Running balance and opening balance for any date range\n- [ ] Manual adjustment entries with mandatory reason, owner only\n- [ ] Reconciliation check job: sum of documents = sum of ledger (alerts on mismatch)\n\n### Scenarios\n- Purchase Rs 100,000 → kissan credit 100,000; payment Rs 40,000 → balance payable 60,000\n- Statement for last month → correct opening balance carried from before\n- Cancelled purchase → reversal entry, balance back to before\n- Manager tries an adjustment → `403`\n- Shop A ledger never visible to shop B\n\n### Testing\n- **Unit:** running balance, opening balance maths\n- **Integration:** documents → ledger consistency\n- **API E2E:** statements, balances, adjustments, permissions, isolation\n- **Performance:** statement for a trader with 50k entries\n\n### Done when\n- Every balance can be traced to entries; reconciliation passes.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M5 Ledger & Payments",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Trader ledger / khata view & statement",
+      "body": "**Side:** Web · **Phase:** M5 Ledger & Payments · **Priority:** High · **Type:** Feature\n\n### Summary\nShow each trader's khata with running balance, plus a printable/exportable statement to hand to the trader.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Table | Shared DataTable | Entries with running balance |\n| Printing | react-to-print | Statement print |\n| Export | SheetJS / PDF | Excel and PDF statement |\n\n### Tasks\n- [ ] Khata page: trader picker, date range, opening balance, entries, closing balance\n- [ ] Click an entry → opens the source purchase/sale/payment\n- [ ] Balances page: all traders with receivable/payable, sorted by amount\n- [ ] Print, Excel, PDF statement in English/Urdu\n\n### Scenarios\n- Debit/credit colours and Dr/Cr labels clear to non-technical users\n- Very long statement → paged, prints correctly\n- Owner sees adjustments marked clearly\n\n### Testing\n- **Component:** balance display\n- **E2E:** purchase + payment → statement shows correct closing balance\n\n### Done when\n- A trader's statement matches the client's manual khata for test data.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M5 Ledger & Payments",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Payments & receipts API (cash / bank, partial)",
+      "body": "**Side:** Backend · **Phase:** M5 Ledger & Payments · **Priority:** High · **Type:** Feature\n\n### Summary\nRecord money paid to farmers and received from buyers, in cash or bank, fully or partly, optionally linked to specific bills.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | NestJS `PaymentsModule` + Drizzle transactions | Payment + ledger atomically |\n| Idempotency | `Idempotency-Key` | No duplicate payments |\n\n### Database\n- `payments`: id, tenant_id, voucher_no, direction (paid/received), trader_id, date, amount, method (cash/bank/cheque/online), reference, notes, status\n- `payment_allocations`: payment_id, document_type, document_id, amount\n\n### API endpoints\n- `POST /payments`, `GET /payments`, `GET /payments/:id`, `POST /payments/:id/cancel`\n\n### Money and weight rules\n- Money stored as `numeric(14,2)`; weights as `numeric(12,3)` in kg\n- All maths with decimal.js on the frontend and in services, never JS floats\n- Rates, commission %, and charges are **copied onto the record** when saved, so later setting changes don't alter history\n\n### Tasks\n- [ ] Create payment/receipt with ledger entry and voucher number\n- [ ] Allocate to one or more bills, or keep as advance\n- [ ] Cash book view: daily cash in/out and closing cash\n- [ ] Cancel with reversal\n\n### Scenarios\n- Pay Rs 40,000 against a Rs 100,000 bill → bill shows Rs 60,000 remaining\n- Pay more than the balance → saved as advance (or blocked by setting)\n- Double-click → one payment only\n- Cancel payment → ledger reversed\n- Shop A can't see shop B payments\n\n### Testing\n- **Unit:** allocation logic\n- **API E2E:** partial, full, advance, cancel, idempotency, isolation\n\n### Done when\n- Bill outstanding amounts and ledger always agree.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M5 Ledger & Payments",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Payments & receipts entry + cash book",
+      "body": "**Side:** Web · **Phase:** M5 Ledger & Payments · **Priority:** High · **Type:** Feature\n\n### Summary\nScreens to pay farmers, receive from buyers, allocate to bills, print vouchers, and see the daily cash book.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Forms | React Hook Form + Zod | Payment form with allocations |\n| Printing | react-to-print | Payment voucher |\n\n### Tasks\n- [ ] Payment/receipt form showing the trader's outstanding bills\n- [ ] Auto-allocate oldest bills first, with manual override\n- [ ] Voucher print\n- [ ] Cash book page by date\n\n### Scenarios\n- Select trader → outstanding bills listed → enter amount → allocated automatically\n- Cash book for today matches the sum of today's cash payments and receipts\n\n### Testing\n- **Component:** allocation UI\n- **E2E:** payment → ledger → cash book\n\n### Done when\n- Daily cash closing possible from the cash book.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M5 Ledger & Payments",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Backend] Reports API",
+      "body": "**Side:** Backend · **Phase:** M6 Reports & Launch · **Priority:** High · **Type:** Feature\n\n### Summary\nServer-side reports for the shop: daily summary, purchases/sales by commodity and trader, commission earned, outstanding balances, and cash book.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Queries | Drizzle + SQL aggregates | Fast grouped totals |\n| Performance | Indexes, materialized views if needed | Large date ranges |\n| Queue (heavy exports) | BullMQ | Generate big reports in the background |\n\n### API endpoints\n- `GET /reports/daily-summary?date=`\n- `GET /reports/purchases` and `/reports/sales` (group by commodity/trader/day)\n- `GET /reports/commission?from=&to=`\n- `GET /reports/outstanding` (receivable / payable)\n- `GET /reports/cash-book?from=&to=`\n\n### Tasks\n- [ ] Report endpoints with date range limits (e.g. max 1 year per request)\n- [ ] Totals must match the ledger and documents exactly\n- [ ] Owner/manager only\n\n### Scenarios\n- Daily summary total purchases = sum of that day's posted purchases\n- Cancelled documents excluded from totals\n- Date range across a financial year → correct\n- Operator calls reports → `403`\n- Shop A report never includes shop B data\n\n### Testing\n- **Integration:** seeded dataset with known expected totals\n- **API E2E:** filters, permissions, isolation\n- **Performance:** 1 year of data for a busy shop under 2 s\n\n### Done when\n- Reports match the client's manual calculation for test data.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Backend",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "High",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Shop owner dashboard",
+      "body": "**Side:** Web · **Phase:** M6 Reports & Launch · **Priority:** Medium · **Type:** Feature\n\n### Summary\nOne screen for the owner: today's purchases, sales, commission, cash in hand, top outstanding traders, and rate trends.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Charts | Recharts | Trends |\n| Data | TanStack Query | Auto refresh every few minutes |\n| UI | shadcn Card | KPI tiles |\n\n### Tasks\n- [ ] KPI tiles: today's purchases, sales, commission, cash in hand\n- [ ] Charts: last 30 days purchases vs sales; rates of top commodities\n- [ ] Top 10 receivables and payables\n- [ ] Role-based: operators see a simpler dashboard\n\n### Scenarios\n- New shop with no data → helpful empty state\n- Numbers match the daily summary report\n\n### Testing\n- **Component:** tiles and empty states\n- **E2E:** dashboard matches report totals\n\n### Done when\n- Owner sees the day's position at a glance.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Reports pages & Excel / PDF export",
+      "body": "**Side:** Web · **Phase:** M6 Reports & Launch · **Priority:** Medium · **Type:** Feature\n\n### Summary\nReport screens with filters, totals, print, and export to Excel and PDF, in English or Urdu.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Table | Shared DataTable | Report tables |\n| Export | SheetJS (xlsx), server PDF | Excel and PDF |\n| Printing | react-to-print | Print |\n\n### Tasks\n- [ ] Pages: Daily summary, Purchases, Sales, Commission, Outstanding, Cash book\n- [ ] Date range presets (today, this week, this month, custom)\n- [ ] Export Excel / PDF, print\n\n### Scenarios\n- Exported Excel opens with correct number formats (PKR, kg)\n- Totals row in export equals on-screen totals\n\n### Testing\n- **E2E:** open each report, export, check totals\n- **Manual:** open exports in Excel\n\n### Done when\n- All reports viewable, printable, and exportable.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Admin] Platform dashboard",
+      "body": "**Side:** Admin · **Phase:** M6 Reports & Launch · **Priority:** Medium · **Type:** Feature\n\n### Summary\nSuper-admin overview: number of shops by status, active users, new shops per month, and recent activity across the platform.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | `/admin/stats` endpoints (super_admin only) | Platform-wide counts |\n| Charts | Recharts | Growth charts |\n\n### Tasks\n- [ ] KPI tiles: total shops, active, trial, suspended, total users\n- [ ] New shops per month chart\n- [ ] Recent activity feed from audit logs\n- [ ] Shops with no activity in 14 days\n\n### Scenarios\n- Only super-admin can load platform stats\n- Stats never expose shop-level business amounts unless explicitly allowed\n\n### Testing\n- **API E2E:** stats correctness, role checks\n- **Component:** tiles\n\n### Done when\n- Super-admin can monitor platform health.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Admin",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[All] Plans & subscription status",
+      "body": "**Side:** All · **Phase:** M6 Reports & Launch · **Priority:** Low · **Type:** Feature\n\n### Summary\nTrack each shop's plan (trial, basic, pro), expiry date, and limits (users, branches). Expired shops get read-only access after a grace period.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Backend | `plans` and `tenant_subscriptions` tables | Plan limits and expiry |\n| Cron | @nestjs/schedule | Daily expiry check and reminders |\n| Payments (later) | Local gateway (JazzCash / Easypaisa) — to be decided | Online renewal |\n\n### Tasks\n- [ ] Plans CRUD (super-admin)\n- [ ] Assign plan and expiry to a shop\n- [ ] Enforce limits (e.g. max users) on the server\n- [ ] Daily job: reminders before expiry, read-only after grace period\n- [ ] Shop panel banner showing days left\n\n### Scenarios\n- Trial ends → 7-day grace → read-only (can view and print, can't create)\n- Max users reached → invite blocked with an upgrade message\n- Super-admin extends plan → full access restored immediately\n\n### Testing\n- **Unit:** limit checks, expiry dates\n- **API E2E:** read-only mode, limits\n\n### Done when\n- Subscription rules enforced server-side.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "All",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "Low",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[Web] Urdu (RTL) support",
+      "body": "**Side:** Web · **Phase:** M6 Reports & Launch · **Priority:** Medium · **Type:** Feature\n\n### Summary\nFull Urdu interface option with right-to-left layout, Urdu fonts, and translated labels, switchable per user.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| i18n | next-intl | Translations |\n| Layout | Tailwind `rtl:` variants + Radix `DirectionProvider` | RTL components |\n| Fonts | Noto Nastaliq Urdu | Urdu text |\n\n### Tasks\n- [ ] Extract all UI strings to translation files (en, ur)\n- [ ] Language switch saved per user\n- [ ] Check every page in RTL: tables, forms, comboboxes, dialogs, charts\n- [ ] Numbers and dates formatted for the chosen language\n\n### Scenarios\n- Switch to Urdu → whole layout mirrors, no overlapping text\n- Mixed English/Urdu trader names display correctly\n- Printing follows the chosen language\n\n### Testing\n- **E2E:** key flows in Urdu\n- **Manual:** visual review with a native Urdu reader\n\n### Done when\n- Client approves the Urdu interface.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "Web",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "Medium",
+        "Type": "Feature"
+      }
+    },
+    {
+      "title": "[DevOps] Deployment, backups & monitoring",
+      "body": "**Side:** All · **Phase:** M6 Reports & Launch · **Priority:** High · **Type:** DevOps\n\n### Summary\nProduction-ready hosting for server, web, and admin with staging, automatic database backups, error tracking, and uptime alerts.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Hosting | To be decided (e.g. VPS with Docker, or managed platform) | Run server, web, admin |\n| Database | Managed PostgreSQL or Postgres on VPS | Production DB |\n| CI/CD | GitHub Actions | Deploy on merge to main (staging) and on release tag (prod) |\n| Errors | Sentry | Error tracking for server and frontends |\n| Uptime | Uptime monitor (e.g. UptimeRobot) | Alerts when down |\n| Backups | Daily `pg_dump` to object storage + point-in-time recovery if available | Data safety |\n\n### Tasks\n- [ ] Staging and production environments with separate databases and secrets\n- [ ] Automatic migrations on deploy\n- [ ] HTTPS, domain, CORS for production origins\n- [ ] Daily backups kept 30 days; **test a restore**\n- [ ] Sentry and uptime alerts to the team\n\n### Scenarios\n- Merge to main → staging updates automatically\n- Failed migration → deploy stops, previous version keeps running\n- Restore yesterday's backup into a fresh DB → app works with that data\n- Server error → Sentry alert within minutes\n\n### Testing\n- **Manual:** restore drill, rollback drill\n- **Smoke:** health checks after every deploy\n\n### Done when\n- Backup restore tested; staging and production running.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "All",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "High",
+        "Type": "DevOps"
+      }
+    },
+    {
+      "title": "[Testing] Security review & load testing before launch",
+      "body": "**Side:** All · **Phase:** M6 Reports & Launch · **Priority:** High · **Type:** Testing\n\n### Summary\nFinal check before real shops use the system: security review focused on multi-tenant isolation, plus load testing of busy mandi hours.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Load testing | k6 | Simulate many operators saving at once |\n| Security | OWASP ZAP baseline scan + manual review | Common web vulnerabilities |\n| Dependencies | npm audit / Dependabot | Vulnerable packages |\n\n### Tasks\n- [ ] Run the full multi-tenant isolation suite against staging\n- [ ] OWASP Top 10 checklist: auth, access control, injection, XSS, CSRF, rate limits, secrets\n- [ ] Load test: 50 shops × 5 operators saving purchases for 10 minutes\n- [ ] Check slow queries and add indexes\n- [ ] Fix all high/critical findings before launch\n\n### Scenarios\n- Peak load → p95 save time under 500 ms, no duplicate bill numbers, no errors\n- Scanner finds no high-severity issues\n- Cross-tenant attempts all blocked\n\n### Testing\n- **Load:** k6 scripts in the repo\n- **Security:** ZAP report attached to this ticket\n\n### Done when\n- Report attached; no open high or critical issues.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "All",
+        "Phase": "M6 Reports & Launch",
+        "Priority": "High",
+        "Type": "Testing"
+      }
+    },
+    {
+      "title": "[App] Mobile app setup & login",
+      "body": "**Side:** App · **Phase:** M7 Mobile App · **Priority:** Low · **Type:** Setup\n\n### Summary\nSet up the mobile app for shop owners and staff, using the same API and the same login/refresh rules as the web.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Framework | React Native + Expo | Android first, iOS later |\n| Data | TanStack Query + Axios | Same patterns as web |\n| Storage | expo-secure-store | Refresh token stored securely |\n| Forms | React Hook Form + Zod (shared schemas) | Validation |\n\n### Tasks\n- [ ] Expo project, navigation, theme, CI build\n- [ ] Login, silent refresh, logout\n- [ ] Role-based tabs\n\n### Scenarios\n- Login with the same account as web; tenant isolation identical\n- App killed and reopened → still logged in\n- Suspended shop → blocked screen\n\n### Testing\n- **Unit:** auth store\n- **E2E:** Maestro or Detox login flow\n- **Manual:** low-end Android phone\n\n### Done when\n- Installable Android build with working login.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "App",
+        "Phase": "M7 Mobile App",
+        "Priority": "Low",
+        "Type": "Setup"
+      }
+    },
+    {
+      "title": "[App] Daily rates, quick purchase/sale & khata on mobile",
+      "body": "**Side:** App · **Phase:** M7 Mobile App · **Priority:** Low · **Type:** Feature\n\n### Summary\nThe most-used shop features on mobile: view and update today's rates, quick purchase/sale entry, and check a trader's balance.\n\n### What we'll use, and why\n| Area | Tool | Used for |\n|---|---|---|\n| Data | TanStack Query | API data with caching |\n| Offline (later) | Query persistence | View last loaded data without internet |\n| Notifications | Expo push notifications | Rate changes, large payments |\n\n### Tasks\n- [ ] Rates screen (view; update for owner/manager)\n- [ ] Quick purchase and sale forms using the shared calculator\n- [ ] Trader search and khata balance\n- [ ] Push notifications (opt-in)\n\n### Scenarios\n- Weak internet → clear loading/error states, no duplicate saves\n- Totals on mobile equal totals on web for the same entry\n\n### Testing\n- **E2E:** rates update, purchase entry\n- **Manual:** weak network testing\n\n### Done when\n- Owner can check rates and balances from the phone.",
+      "fields": {
+        "Status": "Backlog",
+        "Side": "App",
+        "Phase": "M7 Mobile App",
+        "Priority": "Low",
+        "Type": "Feature"
+      }
+    }
+  ]
+}
