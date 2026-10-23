@@ -8,7 +8,7 @@
         "Side": "All",
         "Phase": "M1 Setup & Auth",
         "Priority": "High",
-        "Type": "Setup"
+        "Work Type": "Setup"
       }
     },
     {
@@ -19,7 +19,7 @@
         "Side": "All",
         "Phase": "M1 Setup & Auth",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -30,7 +30,7 @@
         "Side": "Backend",
         "Phase": "M1 Setup & Auth",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -41,7 +41,7 @@
         "Side": "Backend",
         "Phase": "M1 Setup & Auth",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -52,7 +52,7 @@
         "Side": "Backend",
         "Phase": "M1 Setup & Auth",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -63,7 +63,7 @@
         "Side": "Admin",
         "Phase": "M1 Setup & Auth",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -74,7 +74,7 @@
         "Side": "Web",
         "Phase": "M1 Setup & Auth",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -85,7 +85,7 @@
         "Side": "Admin",
         "Phase": "M2 Masters",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -96,7 +96,7 @@
         "Side": "Backend",
         "Phase": "M2 Masters",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -107,7 +107,7 @@
         "Side": "Web",
         "Phase": "M2 Masters",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -118,7 +118,7 @@
         "Side": "All",
         "Phase": "M2 Masters",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -129,7 +129,7 @@
         "Side": "Web",
         "Phase": "M2 Masters",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -140,7 +140,7 @@
         "Side": "Backend",
         "Phase": "M2 Masters",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -151,7 +151,7 @@
         "Side": "Web",
         "Phase": "M2 Masters",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -162,7 +162,7 @@
         "Side": "Backend",
         "Phase": "M2 Masters",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -173,7 +173,7 @@
         "Side": "Web",
         "Phase": "M2 Masters",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -184,7 +184,7 @@
         "Side": "Backend",
         "Phase": "M3 Daily Rates",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -195,7 +195,7 @@
         "Side": "Web",
         "Phase": "M3 Daily Rates",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -206,7 +206,7 @@
         "Side": "Backend",
         "Phase": "M4 Purchases & Sales",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -217,7 +217,7 @@
         "Side": "Backend",
         "Phase": "M4 Purchases & Sales",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -228,7 +228,7 @@
         "Side": "Web",
         "Phase": "M4 Purchases & Sales",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -239,7 +239,7 @@
         "Side": "Backend",
         "Phase": "M4 Purchases & Sales",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -250,7 +250,7 @@
         "Side": "Web",
         "Phase": "M4 Purchases & Sales",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -261,7 +261,7 @@
         "Side": "Backend",
         "Phase": "M4 Purchases & Sales",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -272,7 +272,7 @@
         "Side": "Web",
         "Phase": "M4 Purchases & Sales",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -283,7 +283,7 @@
         "Side": "Backend",
         "Phase": "M5 Ledger & Payments",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -294,7 +294,7 @@
         "Side": "Web",
         "Phase": "M5 Ledger & Payments",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -305,7 +305,7 @@
         "Side": "Backend",
         "Phase": "M5 Ledger & Payments",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -316,7 +316,7 @@
         "Side": "Web",
         "Phase": "M5 Ledger & Payments",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -327,7 +327,7 @@
         "Side": "Backend",
         "Phase": "M6 Reports & Launch",
         "Priority": "High",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -338,7 +338,7 @@
         "Side": "Web",
         "Phase": "M6 Reports & Launch",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -349,7 +349,7 @@
         "Side": "Web",
         "Phase": "M6 Reports & Launch",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -360,7 +360,7 @@
         "Side": "Admin",
         "Phase": "M6 Reports & Launch",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -371,7 +371,7 @@
         "Side": "All",
         "Phase": "M6 Reports & Launch",
         "Priority": "Low",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -382,7 +382,7 @@
         "Side": "Web",
         "Phase": "M6 Reports & Launch",
         "Priority": "Medium",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     },
     {
@@ -393,7 +393,7 @@
         "Side": "All",
         "Phase": "M6 Reports & Launch",
         "Priority": "High",
-        "Type": "DevOps"
+        "Work Type": "DevOps"
       }
     },
     {
@@ -404,7 +404,7 @@
         "Side": "All",
         "Phase": "M6 Reports & Launch",
         "Priority": "High",
-        "Type": "Testing"
+        "Work Type": "Testing"
       }
     },
     {
@@ -415,7 +415,7 @@
         "Side": "App",
         "Phase": "M7 Mobile App",
         "Priority": "Low",
-        "Type": "Setup"
+        "Work Type": "Setup"
       }
     },
     {
@@ -426,7 +426,7 @@
         "Side": "App",
         "Phase": "M7 Mobile App",
         "Priority": "Low",
-        "Type": "Feature"
+        "Work Type": "Feature"
       }
     }
   ]
