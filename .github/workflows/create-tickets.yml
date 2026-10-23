@@ -1,0 +1,214 @@
+name: Create tickets on the org board
+
+# Reads .github/tickets/tickets.json and adds each ticket to the
+# organization project board as a draft item, then sets its fields
+# (Status, Side, Phase, Priority, Type). Tickets whose title is already
+# on the board are skipped, so it is safe to run again after adding
+# new tickets to the file.
+#
+# Needs a repository secret named PROJECT_TOKEN: a fine-grained token
+# with resource owner = the organization and
+# Organization permissions -> Projects: Read and write.
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_number:
+        description: "Board number (the number in the board URL: /orgs/<org>/projects/<number>)"
+        required: true
+        default: "1"
+      dry_run:
+        description: "Only show what would be created, change nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check token
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ -z "$PROJECT_TOKEN" ]; then
+            echo "::error::Secret PROJECT_TOKEN is missing. Add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Add tickets to the board
+        uses: actions/github-script@v7
+        env:
+          ORG: ${{ github.repository_owner }}
+          PROJECT_NUMBER: ${{ inputs.project_number }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const { tickets } = JSON.parse(fs.readFileSync('.github/tickets/tickets.json', 'utf8'));
+            const ORG = process.env.ORG;
+            const NUM = parseInt(process.env.PROJECT_NUMBER, 10);
+            const DRY = process.env.DRY_RUN === 'true';
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            const PROJECT_Q = `query($org: String!, $num: Int!) {
+              organization(login: $org) {
+                projectV2(number: $num) {
+                  id title
+                  fields(first: 50) {
+                    nodes {
+                      __typename
+                      ... on ProjectV2FieldCommon { id name dataType }
+                      ... on ProjectV2SingleSelectField { options { id name } }
+                    }
+                  }
+                }
+              }
+            }`;
+
+            async function loadProject() {
+              const r = await github.graphql(PROJECT_Q, { org: ORG, num: NUM });
+              const p = r.organization && r.organization.projectV2;
+              if (!p) throw new Error(`Board #${NUM} not found in ${ORG}, or the token cannot see it.`);
+              return p;
+            }
+
+            let project = await loadProject();
+            core.info(`Board: "${project.title}" (#${NUM}) — ${tickets.length} tickets in file${DRY ? ' — DRY RUN' : ''}`);
+
+            const fieldByName = (name) =>
+              project.fields.nodes.find((f) => f.name && f.name.toLowerCase() === name.toLowerCase());
+
+            // 1. Create any single-select fields the tickets need that the board doesn't have yet
+            const COLORS = ['BLUE', 'GREEN', 'YELLOW', 'ORANGE', 'RED', 'PINK', 'PURPLE', 'GRAY'];
+            const needed = {};
+            for (const t of tickets) {
+              for (const [k, v] of Object.entries(t.fields || {})) {
+                (needed[k] = needed[k] || new Set()).add(v);
+              }
+            }
+            let created = false;
+            for (const [name, values] of Object.entries(needed)) {
+              if (fieldByName(name)) continue;
+              if (name === 'Status') throw new Error('Board has no Status field.');
+              const options = [...values].map((v, i) => ({ name: v, color: COLORS[i % COLORS.length], description: '' }));
+              core.info(`${DRY ? '[dry run] would create' : 'Creating'} field "${name}": ${[...values].join(', ')}`);
+              if (!DRY) {
+                await github.graphql(
+                  `mutation($p: ID!, $name: String!, $opts: [ProjectV2SingleSelectFieldOptionInput!]) {
+                    createProjectV2Field(input: { projectId: $p, dataType: SINGLE_SELECT, name: $name, singleSelectOptions: $opts }) {
+                      projectV2Field { ... on ProjectV2SingleSelectField { id } }
+                    }
+                  }`,
+                  { p: project.id, name, opts: options }
+                );
+                created = true;
+              }
+            }
+            if (created) project = await loadProject();
+
+            // Board templates sometimes name priorities P0/P1/P2
+            const ALIASES = { high: ['p0', 'urgent'], medium: ['p1'], low: ['p2'] };
+            function optionId(field, value) {
+              const opts = (field && field.options) || [];
+              const want = [value.toLowerCase(), ...(ALIASES[value.toLowerCase()] || [])];
+              for (const w of want) {
+                const o = opts.find((o) => {
+                  const n = o.name.toLowerCase();
+                  return n === w || n.startsWith(w + ' ');
+                });
+                if (o) return o.id;
+              }
+              return null;
+            }
+
+            // 2. Titles already on the board (skip duplicates)
+            const existing = new Set();
+            let after = null;
+            do {
+              const r = await github.graphql(
+                `query($id: ID!, $after: String) {
+                  node(id: $id) { ... on ProjectV2 {
+                    items(first: 100, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes { content {
+                        ... on DraftIssue { title }
+                        ... on Issue { title }
+                        ... on PullRequest { title }
+                      } }
+                    }
+                  } }
+                }`,
+                { id: project.id, after }
+              );
+              const items = r.node.items;
+              items.nodes.forEach((n) => n.content && existing.add(n.content.title));
+              after = items.pageInfo.hasNextPage ? items.pageInfo.endCursor : null;
+            } while (after);
+            core.info(`${existing.size} items already on the board`);
+
+            // 3. Add each ticket and set its fields
+            const rows = [];
+            const warnings = [];
+            let added = 0, skipped = 0, failed = 0;
+            for (const t of tickets) {
+              if (existing.has(t.title)) {
+                skipped++;
+                rows.push([t.title, 'skipped (already on board)']);
+                continue;
+              }
+              if (DRY) {
+                rows.push([t.title, 'would be added']);
+                continue;
+              }
+              try {
+                const r = await github.graphql(
+                  `mutation($p: ID!, $title: String!, $body: String) {
+                    addProjectV2DraftIssue(input: { projectId: $p, title: $title, body: $body }) {
+                      projectItem { id }
+                    }
+                  }`,
+                  { p: project.id, title: t.title, body: t.body }
+                );
+                const itemId = r.addProjectV2DraftIssue.projectItem.id;
+                for (const [name, value] of Object.entries(t.fields || {})) {
+                  const field = fieldByName(name);
+                  const opt = optionId(field, value);
+                  if (!field || !opt) {
+                    warnings.push(`"${t.title}": no option "${value}" in field "${name}"`);
+                    continue;
+                  }
+                  await github.graphql(
+                    `mutation($p: ID!, $item: ID!, $field: ID!, $opt: String!) {
+                      updateProjectV2ItemFieldValue(input: {
+                        projectId: $p, itemId: $item, fieldId: $field,
+                        value: { singleSelectOptionId: $opt }
+                      }) { projectV2Item { id } }
+                    }`,
+                    { p: project.id, item: itemId, field: field.id, opt }
+                  );
+                }
+                added++;
+                existing.add(t.title);
+                rows.push([t.title, 'added']);
+                core.info(`Added: ${t.title}`);
+              } catch (e) {
+                failed++;
+                rows.push([t.title, `FAILED: ${e.message}`]);
+                core.error(`${t.title}: ${e.message}`);
+              }
+              await sleep(400); // stay well under GitHub's secondary rate limits
+            }
+
+            warnings.forEach((w) => core.warning(w));
+            await core.summary
+              .addHeading(`Tickets → ${project.title}${DRY ? ' (dry run)' : ''}`)
+              .addRaw(`Added: ${added} · Skipped: ${skipped} · Failed: ${failed} · Warnings: ${warnings.length}`)
+              .addTable([[{ data: 'Ticket', header: true }, { data: 'Result', header: true }], ...rows])
+              .write();
+            if (failed) core.setFailed(`${failed} ticket(s) failed — see the log. Re-running skips the ones already added.`);
