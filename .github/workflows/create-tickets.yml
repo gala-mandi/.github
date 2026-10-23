@@ -2,9 +2,9 @@ name: Create tickets on the org board
 
 # Reads .github/tickets/tickets.json and adds each ticket to the
 # organization project board as a draft item, then sets its fields
-# (Status, Side, Phase, Priority, Type). Tickets whose title is already
-# on the board are skipped, so it is safe to run again after adding
-# new tickets to the file.
+# (Status, Side, Phase, Priority, Work Type). Tickets already on the board
+# are not duplicated: a re-run only fills in an empty description or empty
+# fields, so it is safe to run again after adding new tickets to the file.
 #
 # Needs a repository secret named PROJECT_TOKEN: a fine-grained token
 # with resource owner = the organization and
@@ -112,91 +112,139 @@ jobs:
             }
             if (created) project = await loadProject();
 
-            // Board templates sometimes name priorities P0/P1/P2
+            // Option names may carry emoji or prefixes ("🏔 High", "P1 · Medium"), or P0/P1/P2
             const ALIASES = { high: ['p0', 'urgent'], medium: ['p1'], low: ['p2'] };
+            const norm = (s) => s.toLowerCase().replace(/[^a-z0-9& ]+/g, ' ').replace(/\s+/g, ' ').trim();
             function optionId(field, value) {
               const opts = (field && field.options) || [];
-              const want = [value.toLowerCase(), ...(ALIASES[value.toLowerCase()] || [])];
-              for (const w of want) {
-                const o = opts.find((o) => {
-                  const n = o.name.toLowerCase();
-                  return n === w || n.startsWith(w + ' ');
-                });
-                if (o) return o.id;
+              const v = norm(value);
+              // exact (ignoring emoji/punctuation), then whole-word match, then aliases
+              let o = opts.find((o) => norm(o.name) === v)
+                || opts.find((o) => norm(o.name).split(' ').includes(v) && v.indexOf(' ') < 0);
+              if (!o) {
+                for (const a of ALIASES[v] || []) {
+                  o = opts.find((x) => norm(x.name) === a || norm(x.name).split(' ').includes(a));
+                  if (o) break;
+                }
               }
-              return null;
+              return o ? o.id : null;
+            }
+            const optionNames = (field) => ((field && field.options) || []).map((o) => o.name).join(', ');
+
+            async function setField(itemId, name, value, title, warnings) {
+              const field = fieldByName(name);
+              const opt = optionId(field, value);
+              if (!field || !opt) {
+                warnings.push(`"${title}": no option "${value}" in field "${name}" (board has: ${optionNames(field) || 'no such field'})`);
+                return false;
+              }
+              await github.graphql(
+                `mutation($p: ID!, $item: ID!, $field: ID!, $opt: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $p, itemId: $item, fieldId: $field,
+                    value: { singleSelectOptionId: $opt }
+                  }) { projectV2Item { id } }
+                }`,
+                { p: project.id, item: itemId, field: field.id, opt }
+              );
+              return true;
             }
 
-            // 2. Titles already on the board (skip duplicates)
-            const existing = new Set();
+            // 2. Items already on the board, with their current field values
+            const existing = new Map(); // title -> { itemId, draftId, body, values: {fieldName: value} }
             let after = null;
             do {
               const r = await github.graphql(
                 `query($id: ID!, $after: String) {
                   node(id: $id) { ... on ProjectV2 {
-                    items(first: 100, after: $after) {
+                    items(first: 50, after: $after) {
                       pageInfo { hasNextPage endCursor }
-                      nodes { content {
-                        ... on DraftIssue { title }
-                        ... on Issue { title }
-                        ... on PullRequest { title }
-                      } }
+                      nodes {
+                        id
+                        content {
+                          ... on DraftIssue { id title body }
+                          ... on Issue { title }
+                          ... on PullRequest { title }
+                        }
+                        fieldValues(first: 30) { nodes {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            name
+                            field { ... on ProjectV2FieldCommon { name } }
+                          }
+                        } }
+                      }
                     }
                   } }
                 }`,
                 { id: project.id, after }
               );
               const items = r.node.items;
-              items.nodes.forEach((n) => n.content && existing.add(n.content.title));
+              for (const n of items.nodes) {
+                if (!n.content || !n.content.title) continue;
+                const values = {};
+                for (const fv of n.fieldValues.nodes) {
+                  if (fv && fv.field && fv.field.name) values[fv.field.name.toLowerCase()] = fv.name;
+                }
+                existing.set(n.content.title, {
+                  itemId: n.id,
+                  draftId: n.content.body !== undefined ? n.content.id : null,
+                  body: n.content.body || '',
+                  values,
+                });
+              }
               after = items.pageInfo.hasNextPage ? items.pageInfo.endCursor : null;
             } while (after);
             core.info(`${existing.size} items already on the board`);
 
-            // 3. Add each ticket and set its fields
+            // 3. Add new tickets; for ones already on the board, only fill in what is missing
+            //    (an empty description, or a field with no value). Values people set are never changed.
             const rows = [];
             const warnings = [];
-            let added = 0, skipped = 0, failed = 0;
+            let added = 0, completed = 0, unchanged = 0, failed = 0;
             for (const t of tickets) {
-              if (existing.has(t.title)) {
-                skipped++;
-                rows.push([t.title, 'skipped (already on board)']);
-                continue;
-              }
-              if (DRY) {
-                rows.push([t.title, 'would be added']);
-                continue;
-              }
+              const ex = existing.get(t.title);
               try {
-                const r = await github.graphql(
-                  `mutation($p: ID!, $title: String!, $body: String) {
-                    addProjectV2DraftIssue(input: { projectId: $p, title: $title, body: $body }) {
-                      projectItem { id }
-                    }
-                  }`,
-                  { p: project.id, title: t.title, body: t.body }
-                );
-                const itemId = r.addProjectV2DraftIssue.projectItem.id;
-                for (const [name, value] of Object.entries(t.fields || {})) {
-                  const field = fieldByName(name);
-                  const opt = optionId(field, value);
-                  if (!field || !opt) {
-                    warnings.push(`"${t.title}": no option "${value}" in field "${name}"`);
-                    continue;
+                if (ex) {
+                  const todo = [];
+                  if (ex.draftId && !ex.body.trim() && t.body) todo.push('description');
+                  const missing = Object.entries(t.fields || {}).filter(([name]) => !ex.values[name.toLowerCase()]);
+                  missing.forEach(([name]) => todo.push(name));
+                  if (!todo.length) { unchanged++; rows.push([t.title, 'already complete']); continue; }
+                  if (DRY) { rows.push([t.title, `would fill in: ${todo.join(', ')}`]); continue; }
+                  const done = [];
+                  if (todo.includes('description')) {
+                    await github.graphql(
+                      `mutation($d: ID!, $body: String!) {
+                        updateProjectV2DraftIssue(input: { draftIssueId: $d, body: $body }) { draftIssue { id } }
+                      }`,
+                      { d: ex.draftId, body: t.body }
+                    );
+                    done.push('description');
                   }
-                  await github.graphql(
-                    `mutation($p: ID!, $item: ID!, $field: ID!, $opt: String!) {
-                      updateProjectV2ItemFieldValue(input: {
-                        projectId: $p, itemId: $item, fieldId: $field,
-                        value: { singleSelectOptionId: $opt }
-                      }) { projectV2Item { id } }
+                  for (const [name, value] of missing) {
+                    if (await setField(ex.itemId, name, value, t.title, warnings)) done.push(name);
+                  }
+                  if (done.length) { completed++; rows.push([t.title, `filled in: ${done.join(', ')}`]); core.info(`Filled in ${done.join(', ')}: ${t.title}`); }
+                  else { unchanged++; rows.push([t.title, 'nothing could be filled (see warnings)']); }
+                } else {
+                  if (DRY) { rows.push([t.title, 'would be added']); continue; }
+                  const r = await github.graphql(
+                    `mutation($p: ID!, $title: String!, $body: String) {
+                      addProjectV2DraftIssue(input: { projectId: $p, title: $title, body: $body }) {
+                        projectItem { id }
+                      }
                     }`,
-                    { p: project.id, item: itemId, field: field.id, opt }
+                    { p: project.id, title: t.title, body: t.body }
                   );
+                  const itemId = r.addProjectV2DraftIssue.projectItem.id;
+                  for (const [name, value] of Object.entries(t.fields || {})) {
+                    await setField(itemId, name, value, t.title, warnings);
+                  }
+                  added++;
+                  existing.set(t.title, { itemId, draftId: null, body: t.body, values: {} });
+                  rows.push([t.title, 'added']);
+                  core.info(`Added: ${t.title}`);
                 }
-                added++;
-                existing.add(t.title);
-                rows.push([t.title, 'added']);
-                core.info(`Added: ${t.title}`);
               } catch (e) {
                 failed++;
                 rows.push([t.title, `FAILED: ${e.message}`]);
@@ -208,7 +256,7 @@ jobs:
             warnings.forEach((w) => core.warning(w));
             await core.summary
               .addHeading(`Tickets → ${project.title}${DRY ? ' (dry run)' : ''}`)
-              .addRaw(`Added: ${added} · Skipped: ${skipped} · Failed: ${failed} · Warnings: ${warnings.length}`)
+              .addRaw(`Added: ${added} · Filled in: ${completed} · Already complete: ${unchanged} · Failed: ${failed} · Warnings: ${warnings.length}`)
               .addTable([[{ data: 'Ticket', header: true }, { data: 'Result', header: true }], ...rows])
               .write();
-            if (failed) core.setFailed(`${failed} ticket(s) failed — see the log. Re-running skips the ones already added.`);
+            if (failed) core.setFailed(`${failed} ticket(s) failed — see the log. Re-running only fills in what is missing.`);
