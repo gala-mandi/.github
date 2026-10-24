@@ -5,6 +5,8 @@ name: Create tickets on the org board
 # (Status, Side, Phase, Priority, Work Type). Tickets already on the board
 # are not duplicated: a re-run only fills in an empty description or empty
 # fields, so it is safe to run again after adding new tickets to the file.
+# With "update_descriptions" on, descriptions that differ from tickets.json are
+# replaced (only for draft items; converted issues are never touched).
 #
 # Needs a repository secret named PROJECT_TOKEN: a fine-grained token
 # with resource owner = the organization and
@@ -19,6 +21,10 @@ on:
         default: "1"
       dry_run:
         description: "Only show what would be created, change nothing"
+        type: boolean
+        default: false
+      update_descriptions:
+        description: "Also replace descriptions of tickets already on the board with the version in tickets.json (overwrites manual edits to those descriptions)"
         type: boolean
         default: false
 
@@ -46,6 +52,7 @@ jobs:
           ORG: ${{ github.repository_owner }}
           PROJECT_NUMBER: ${{ inputs.project_number }}
           DRY_RUN: ${{ inputs.dry_run }}
+          UPDATE_DESC: ${{ inputs.update_descriptions }}
         with:
           github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
@@ -54,6 +61,7 @@ jobs:
             const ORG = process.env.ORG;
             const NUM = parseInt(process.env.PROJECT_NUMBER, 10);
             const DRY = process.env.DRY_RUN === 'true';
+            const UPDATE_DESC = process.env.UPDATE_DESC === 'true';
             const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
             const PROJECT_Q = `query($org: String!, $num: Int!) {
@@ -206,7 +214,7 @@ jobs:
               try {
                 if (ex) {
                   const todo = [];
-                  if (ex.draftId && !ex.body.trim() && t.body) todo.push('description');
+                  if (ex.draftId && t.body && (!ex.body.trim() || (UPDATE_DESC && ex.body.trim() !== t.body.trim()))) todo.push('description');
                   const missing = Object.entries(t.fields || {}).filter(([name]) => !ex.values[name.toLowerCase()]);
                   missing.forEach(([name]) => todo.push(name));
                   if (!todo.length) { unchanged++; rows.push([t.title, 'already complete']); continue; }
