@@ -1,0 +1,126 @@
+name: Set up repos for Claude
+
+# Copies the shared files into gala-mandi/server, web, admin and app (and the Start ticket
+# workflow into this repo):
+#   - CLAUDE.md                       (only if the repo doesn't have one yet - edit it freely after)
+#   - .github/workflows/claude.yml    (lets @claude work in that repo)
+#   - docs/design/**                  (screen designs; web, admin, app)
+#   - docs/database/schema.dbml       (copied from docs/database/schema.dbml in THIS repo)
+# Everything comes from bootstrap/bundle.b64. Safe to run again: re-running refreshes the
+# design and schema copies, so run it after changing docs/database/schema.dbml.
+#
+# Needs the PROJECT_TOKEN secret to also have, for all repositories:
+#   Contents: Read and write, Workflows: Read and write.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only show what would change, push nothing"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [docs/database/schema.dbml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-repos
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check token
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ -z "$PROJECT_TOKEN" ]; then
+            echo "::error::Secret PROJECT_TOKEN is missing."
+            exit 1
+          fi
+
+      - name: Unpack bundle
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, io, json, lzma, pathlib, tarfile, urllib.request
+          raw = lzma.decompress(base64.b64decode(pathlib.Path('bootstrap/bundle.b64').read_text()))
+          tar = tarfile.open(fileobj=io.BytesIO(raw))
+          m = json.load(tar.extractfile('manifest.json'))
+          out = pathlib.Path('/tmp/bundle')
+          # full-size wheat-field photo (Unsplash), used by the success, admin and mobile screens
+          field = None
+          try:
+              url = 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=1600&q=80&fm=webp'
+              field = urllib.request.urlopen(url, timeout=60).read()
+          except Exception as e:
+              print('::warning::Could not download the wheat-field photo:', e)
+          n = 0
+          for repo, files in m['repos'].items():
+              for path, key in files.items():
+                  data = tar.extractfile(f'blobs/{key}').read()
+                  assert hashlib.sha256(data).hexdigest()[:16] == key, path
+                  f = out / repo / path
+                  f.parent.mkdir(parents=True, exist_ok=True)
+                  f.write_bytes(data); n += 1
+              if field and 'docs/design/README.md' in files:
+                  (out / repo / 'docs/design/images/wheat-field.webp').write_bytes(field); n += 1
+          pathlib.Path('/tmp/create_only').write_text('\n'.join(m['create_only']) + '\n')
+          print(n, 'files for', ', '.join(m['repos']))
+          PY
+
+      - name: Push to repos
+        env:
+          TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          git config --global user.name "Galla Mandi setup"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global init.defaultBranch main
+          echo "## Set up repos" >> "$GITHUB_STEP_SUMMARY"
+          for dir in /tmp/bundle/*/ /tmp/bundle/.github/; do
+            [ -d "$dir" ] || continue
+            repo=$(basename "$dir")
+            work="/tmp/work/$repo"
+            git clone -q --no-checkout "https://x-access-token:${TOKEN}@github.com/${ORG}/${repo}.git" "$work"
+            cd "$work"
+            if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+              git checkout -q -B main origin/main
+            else
+              git symbolic-ref HEAD refs/heads/main   # empty repo: first commit creates main
+            fi
+            # copy files; create-only files are skipped when they already exist
+            (cd "$dir" && find . -type f) | while read -r f; do
+              f="${f#./}"
+              if grep -qxF "$f" /tmp/create_only && [ -e "$f" ]; then continue; fi
+              mkdir -p "$(dirname "$f")"
+              cp "$dir/$f" "$f"
+            done
+            # the database design: always the copy from this repo
+            if [ "$repo" != ".github" ]; then
+              mkdir -p docs/database
+              cp "$GITHUB_WORKSPACE/docs/database/schema.dbml" docs/database/schema.dbml
+            fi
+            git add -A
+            if git diff --cached --quiet; then
+              echo "- \`$repo\`: already up to date" >> "$GITHUB_STEP_SUMMARY"
+            else
+              changed=$(git diff --cached --name-only | tr '\n' ' ')
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "- \`$repo\`: would update $changed" >> "$GITHUB_STEP_SUMMARY"
+              else
+                git commit -q -m "chore: set up Claude workflow, CLAUDE.md and shared docs" \
+                  -m "Synced from gala-mandi/.github by the 'Set up repos for Claude' workflow."
+                git push -q origin HEAD:main
+                echo "- \`$repo\`: updated $changed" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+            cd /
+          done
