@@ -1,0 +1,261 @@
+name: Start ticket
+
+# Hands a ticket from the org board to Claude.
+#
+# 1. Picks the ticket: the one you name, or (if you leave it empty) the next ticket in the order
+#    of .github/tickets/tickets.json that is still a draft in Backlog / Todo / Ready.
+# 2. Works out the repo from the ticket's Side (Backend -> server, Web -> web, Admin -> admin,
+#    App -> app). "All" tickets go to every repo named in their tasks (e.g. **server:**, **web:**).
+# 3. Turns the draft into an issue in that repo (for "All" tickets: one issue per repo, linked to
+#    the main one), sets Status to "In progress", and comments "@claude implement this ticket".
+#    The Claude workflow in that repo then writes the code and replies with a pull-request link.
+#
+# Needs the PROJECT_TOKEN secret with: Organization > Projects: Read and write, and for all
+# repositories: Issues: Read and write (plus Metadata: Read, added automatically).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: "Ticket title, or part of it (e.g. 'Project setup'). Leave empty to start the next ticket."
+        required: false
+        default: ""
+      repo:
+        description: "Repo to work in. 'auto' = decide from the ticket."
+        type: choice
+        options: [auto, server, web, admin, app]
+        default: auto
+      restart:
+        description: "Ask Claude again even if this ticket was already started"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Only show what would happen, change nothing"
+        type: boolean
+        default: false
+      project_number:
+        description: "Board number"
+        required: true
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: start-ticket
+  cancel-in-progress: false
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check token
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ -z "$PROJECT_TOKEN" ]; then
+            echo "::error::Secret PROJECT_TOKEN is missing. Add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Start the ticket
+        uses: actions/github-script@v7
+        env:
+          ORG: ${{ github.repository_owner }}
+          PROJECT_NUMBER: ${{ inputs.project_number }}
+          TICKET: ${{ inputs.ticket }}
+          REPO: ${{ inputs.repo }}
+          RESTART: ${{ inputs.restart }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const ORG = process.env.ORG;
+            const NUM = parseInt(process.env.PROJECT_NUMBER, 10);
+            const WANT = (process.env.TICKET || '').trim().toLowerCase();
+            const REPO_IN = process.env.REPO || 'auto';
+            const RESTART = process.env.RESTART === 'true';
+            const DRY = process.env.DRY_RUN === 'true';
+            const REPOS = ['server', 'web', 'admin', 'app'];
+            const ABOUT = {
+              server: 'the NestJS API',
+              web: 'the Next.js shop panel',
+              admin: 'the Next.js super-admin panel',
+              app: 'the React Native + Expo mobile app',
+            };
+            const order = JSON.parse(fs.readFileSync('.github/tickets/tickets.json', 'utf8')).tickets.map((t) => t.title);
+            const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+            // ---- board, fields, items
+            const p = (await github.graphql(
+              `query($org: String!, $num: Int!) { organization(login: $org) { projectV2(number: $num) {
+                id title
+                fields(first: 50) { nodes {
+                  ... on ProjectV2FieldCommon { id name }
+                  ... on ProjectV2SingleSelectField { options { id name } }
+                } }
+              } } }`, { org: ORG, num: NUM })).organization.projectV2;
+            if (!p) throw new Error(`Board #${NUM} not found or the token cannot see it.`);
+            const field = (name) => p.fields.nodes.find((f) => f.name && f.name.toLowerCase() === name.toLowerCase());
+            const statusField = field('Status');
+
+            const items = [];
+            let after = null;
+            do {
+              const r = await github.graphql(
+                `query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 {
+                  items(first: 50, after: $after) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      id
+                      content {
+                        __typename
+                        ... on DraftIssue { id title body }
+                        ... on Issue { id number title body url state repository { name } }
+                      }
+                      fieldValues(first: 30) { nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue { name optionId field { ... on ProjectV2FieldCommon { id name } } }
+                      } }
+                    }
+                  }
+                } } }`, { id: p.id, after });
+              const page = r.node.items;
+              for (const n of page.nodes) {
+                if (!n.content || !n.content.title) continue;
+                const values = {};
+                for (const fv of n.fieldValues.nodes) {
+                  if (fv && fv.field) values[fv.field.name] = { name: fv.name, optionId: fv.optionId, fieldId: fv.field.id };
+                }
+                items.push({ id: n.id, c: n.content, values });
+              }
+              after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+            } while (after);
+
+            // ---- pick the ticket
+            const startable = (it) => it.c.__typename === 'DraftIssue'
+              && ['', 'backlog', 'todo', 'ready'].includes(norm(it.values.Status && it.values.Status.name));
+            let item;
+            if (WANT) {
+              const matches = items.filter((it) => it.c.title.toLowerCase().includes(WANT)
+                && !/ \((server|web|admin|app) part\)$/.test(it.c.title));
+              if (!matches.length) throw new Error(`No ticket on the board matches "${process.env.TICKET}".`);
+              if (matches.length > 1) {
+                const exact = matches.find((it) => it.c.title.toLowerCase() === WANT);
+                if (!exact) throw new Error(`"${process.env.TICKET}" matches ${matches.length} tickets: ${matches.map((m) => m.c.title).join(' | ')}. Use more of the title.`);
+                item = exact;
+              } else item = matches[0];
+            } else {
+              for (const title of order) {
+                const it = items.find((x) => x.c.title === title);
+                if (it && startable(it)) { item = it; break; }
+              }
+              if (!item) throw new Error('No ticket left to start: every ticket in tickets.json is already an issue or not in Backlog/Todo/Ready.');
+            }
+            const title = item.c.title;
+            const body = item.c.body || '';
+            core.info(`Ticket: ${title}`);
+
+            // ---- which repos
+            const side = norm(item.values.Side && item.values.Side.name);
+            let targets;
+            if (REPO_IN !== 'auto') targets = [REPO_IN];
+            else if (item.c.__typename === 'Issue' && side !== 'all') targets = [item.c.repository.name];
+            else {
+              const map = { backend: ['server'], web: ['web'], admin: ['admin'], app: ['app'] };
+              targets = map[side];
+              if (!targets) {
+                // "All": use the repos named in the task prefixes, e.g. **server:** / **web + admin:** / **all repos:**
+                const found = new Set();
+                for (const m of body.matchAll(/\*\*([a-z +]+):\*\*/gi)) {
+                  const k = m[1].toLowerCase();
+                  if (k.includes('all repos')) ['server', 'web', 'admin'].forEach((r) => found.add(r));
+                  REPOS.forEach((r) => { if (new RegExp(`\\b${r}\\b`).test(k)) found.add(r); });
+                }
+                targets = REPOS.filter((r) => found.has(r));
+                if (!targets.length) targets = ['server'];
+              }
+            }
+            core.info(`Repos: ${targets.join(', ')}`);
+
+            // ---- helpers
+            const repoId = async (name) => (await github.rest.repos.get({ owner: ORG, repo: name })).data.node_id;
+            const inProgress = statusField && (statusField.options || []).find((o) => norm(o.name).includes('progress'));
+            async function setStatus(itemId) {
+              if (!inProgress) { core.warning('The board has no "In progress" status; status left as it is.'); return; }
+              await github.graphql(
+                `mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) { updateProjectV2ItemFieldValue(input: {
+                  projectId: $p, itemId: $i, fieldId: $f, value: { singleSelectOptionId: $o } }) { projectV2Item { id } } }`,
+                { p: p.id, i: itemId, f: statusField.id, o: inProgress.id });
+            }
+            async function copyFields(itemId) {
+              for (const [name, v] of Object.entries(item.values)) {
+                if (name === 'Status' || !v.optionId) continue;
+                await github.graphql(
+                  `mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) { updateProjectV2ItemFieldValue(input: {
+                    projectId: $p, itemId: $i, fieldId: $f, value: { singleSelectOptionId: $o } }) { projectV2Item { id } } }`,
+                  { p: p.id, i: itemId, f: v.fieldId, o: v.optionId });
+              }
+            }
+            const prompt = (repo, multi, mainUrl) => [
+              '@claude implement this ticket.',
+              '',
+              `- This repo is **${repo}** (${ABOUT[repo]}). Only do the part of the ticket that belongs here${multi ? `; the other parts are separate issues in the other repos${mainUrl ? ` (main ticket: ${mainUrl})` : ''}` : ''}.`,
+              '- Read `CLAUDE.md` first and follow it.',
+              '- Use the **Design & references** section: screens are in `docs/design/` (see `docs/design/README.md`), tables in `docs/database/schema.dbml`.',
+              '- Do every task for this repo, cover the scenarios, and write the tests listed under **Testing** that apply here.',
+              '- Stay inside this ticket. If something is unclear or blocked, ask here in a comment instead of guessing.',
+              '- When you finish: lint, type-check and tests pass; reply with what you built, how to run it, and the pull-request link (description with `Closes #` this issue).',
+            ].join('\n');
+
+            const rows = [];
+            const multi = targets.length > 1;
+            let mainUrl = item.c.__typename === 'Issue' ? item.c.url : null;
+            for (const repo of targets) {
+              let issue; let isNew = false; let itemId;
+              const partTitle = `${title} (${repo} part)`;
+              if (item.c.__typename === 'DraftIssue' && !mainUrl) {
+                // first repo: turn the draft itself into the issue
+                if (DRY) { rows.push([repo, 'would convert the draft into an issue and ask Claude']); mainUrl = '(main issue)'; continue; }
+                const r = await github.graphql(
+                  `mutation($i: ID!, $r: ID!) { convertProjectV2DraftIssueItemToIssue(input: { itemId: $i, repositoryId: $r }) {
+                    item { id content { ... on Issue { number url } } } } }`,
+                  { i: item.id, r: await repoId(repo) });
+                issue = r.convertProjectV2DraftIssueItemToIssue.item.content;
+                itemId = r.convertProjectV2DraftIssueItemToIssue.item.id;
+                mainUrl = issue.url; isNew = true;
+              } else if (item.c.__typename === 'Issue' && item.c.repository.name === repo) {
+                issue = { number: item.c.number, url: item.c.url }; itemId = item.id;
+              } else {
+                const ex = items.find((x) => x.c.__typename === 'Issue' && x.c.repository.name === repo
+                  && (x.c.title === partTitle || x.c.title === title));
+                if (ex) { issue = { number: ex.c.number, url: ex.c.url }; itemId = ex.id; }
+                else {
+                  if (DRY) { rows.push([repo, `would create issue "${partTitle}" and ask Claude`]); continue; }
+                  const created = (await github.rest.issues.create({
+                    owner: ORG, repo, title: partTitle,
+                    body: `Part of ${mainUrl}. Do only the **${repo}** part of this ticket here.\n\n${body}`,
+                  })).data;
+                  issue = { number: created.number, url: created.html_url }; isNew = true;
+                  itemId = (await github.graphql(
+                    `mutation($p: ID!, $c: ID!) { addProjectV2ItemById(input: { projectId: $p, contentId: $c }) { item { id } } }`,
+                    { p: p.id, c: created.node_id })).addProjectV2ItemById.item.id;
+                  await copyFields(itemId);
+                }
+              }
+              if (!isNew && !RESTART) { rows.push([repo, `already started: ${issue.url} (tick "restart" to ask Claude again)`]); continue; }
+              if (DRY) { rows.push([repo, `would ask Claude again on ${issue.url}`]); continue; }
+              await setStatus(itemId);
+              await github.rest.issues.createComment({ owner: ORG, repo, issue_number: issue.number, body: prompt(repo, multi, repo === targets[0] ? null : mainUrl) });
+              rows.push([repo, `Claude asked on ${issue.url}`]);
+              core.info(`${repo}: ${issue.url}`);
+            }
+
+            await core.summary
+              .addHeading(`Start ticket${DRY ? ' (dry run)' : ''}: ${title}`)
+              .addRaw('Claude replies on each issue within a minute or two and posts a pull-request link when it is done. ' +
+                      'Watch progress under Actions in each repo.')
+              .addTable([[{ data: 'Repo', header: true }, { data: 'Result', header: true }], ...rows])
+              .write();
